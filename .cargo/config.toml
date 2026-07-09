@@ -1,0 +1,5 @@
+# PHP extensions are loaded into the running PHP process, which already provides
+# the Zend/PHP symbols. On macOS the linker rejects undefined symbols by default,
+# so resolve them dynamically at load time instead. (Linux does this already.)
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-undefined", "-C", "link-arg=dynamic_lookup"]

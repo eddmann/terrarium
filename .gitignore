@@ -1,0 +1,15 @@
+/target
+/guests/boa/target
+/guests/rustpython/target
+/guests/quickjs/build
+/guests/quickjs/quickjs_guest.wasm
+/guests/php/build
+/guests/php/php_guest.wasm
+/guests/typescript/build
+/guests/typescript/typescript_guest.wasm
+/guests/typescript/wizen/target
+# The root Cargo.lock is tracked (reproducible extension builds + cargo audit in
+# CI). The guest crates are build-time wasm tooling — their lockfiles stay out.
+/guests/boa/Cargo.lock
+/guests/rustpython/Cargo.lock
+/guests/typescript/wizen/Cargo.lock

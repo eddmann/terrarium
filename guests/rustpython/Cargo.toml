@@ -1,0 +1,25 @@
+[package]
+name = "rustpython-guest"
+version = "1.0.0"
+edition = "2021"
+description = "A real Python interpreter (RustPython) compiled to wasm as a Terrarium guest: eval(src) with SDK capabilities by name"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pure-Rust Python interpreter -> compiles to wasm32-unknown-unknown with no C
+# toolchain. No stdlib (builtins only) keeps it lean; `compiler` enables eval.
+rustpython-vm = { version = "0.5", default-features = false, features = ["compiler"] }
+# RustPython pulls both getrandom 0.2 (custom feature) and 0.3 (custom backend
+# via the cfg in .cargo/config.toml); a bare wasm guest has no OS entropy, so we
+# provide both hooks. See src/lib.rs.
+getrandom = { version = "0.2", features = ["custom"] }
+getrandom3 = { package = "getrandom", version = "0.3" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

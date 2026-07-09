@@ -1,0 +1,31 @@
+[package]
+name = "terrarium"
+version = "1.0.0"
+edition = "2021"
+description = "Expose a typed PHP SDK to a sandboxed guest language (JS/TS/Python/PHP) running inside a WebAssembly isolation boundary"
+license = "MIT"
+authors = ["Edd Mann <the@eddmann.com>"]
+repository = "https://github.com/eddmann/terrarium"
+
+[lib]
+name = "terrarium"
+crate-type = ["cdylib"]
+
+[dependencies]
+ext-php-rs = { version = "0.15", features = ["closure"] }
+# The high-level Wasmtime embedding API (cranelift + native trap handling).
+wasmtime = "46"
+# WASI preview1 host support, so guests built against a libc (e.g. QuickJS via
+# the WASI SDK) get working clock/random/etc. Capability-only guests (Boa, the
+# example SDK guest) simply don't import any of it.
+wasmtime-wasi = "46"
+# Value marshaling: a neutral MiddleValue (de)serialized to native msgpack, the
+# byte form carried across the host_call boundary.
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+rmp-serde = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+panic = "unwind"

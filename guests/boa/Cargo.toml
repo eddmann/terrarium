@@ -1,0 +1,23 @@
+[package]
+name = "boa-guest"
+version = "1.0.0"
+edition = "2021"
+description = "A real JS engine (Boa) compiled to wasm as a Terrarium guest: eval(src) with SDK capabilities by name"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pure-Rust JS engine -> compiles to wasm32-unknown-unknown with no C toolchain.
+# default-features off drops the heavy ICU/Intl data.
+boa_engine = { version = "0.20", default-features = false }
+# A bare wasm guest has no OS entropy; register a custom getrandom backend so
+# Boa's RNG/hash-seeding links. Deterministic — fine for a sandboxed guest.
+getrandom = { version = "0.2", features = ["custom"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"

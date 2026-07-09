@@ -1,0 +1,22 @@
+# Standalone build-time tool: pre-initialize the TypeScript guest with Wizer.
+# Self-contained (its own [workspace]) so it never joins the extension crate's
+# build; it pulls its own Wasmtime via the `wizer` re-export, independent of the
+# version the extension pins.
+[workspace]
+
+[package]
+name = "ts-wizen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "ts-wizen"
+path = "src/main.rs"
+
+[dependencies]
+wizer = "10"
+anyhow = "1"
+
+[profile.release]
+opt-level = 2

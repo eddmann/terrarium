@@ -1,0 +1,4 @@
+# Select getrandom 0.3's "custom" backend; the hook is __getrandom_v03_custom
+# in src/lib.rs. A bare wasm32-unknown-unknown guest has no OS entropy source.
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="custom"']

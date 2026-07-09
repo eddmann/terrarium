@@ -1,0 +1,17 @@
+{
+    "name": "eddmann/terrarium",
+    "description": "Typed PHP SDK for running untrusted JS, TypeScript, Python, or PHP sandboxed in WebAssembly",
+    "keywords": ["webassembly", "wasm", "sandbox", "php-extension", "quickjs", "typescript", "python", "capability-security", "isolation"],
+    "homepage": "https://github.com/eddmann/terrarium",
+    "license": "MIT",
+    "authors": [
+        { "name": "Edd Mann", "email": "the@eddmann.com" }
+    ],
+    "require": {
+        "php": ">=8.4",
+        "ext-terrarium": "*"
+    },
+    "autoload": {
+        "psr-4": { "Terrarium\\": "lib/" }
+    }
+}
