@@ -1,7 +1,7 @@
 # TypeScript guest — checked inside the sandbox
 
 [QuickJS-ng](https://github.com/quickjs-ng/quickjs) `v0.15.1` carrying the real
-[TypeScript compiler](https://github.com/microsoft/TypeScript) `5.7.3` (and
+[TypeScript compiler](https://github.com/microsoft/TypeScript) `6.0.3` (and
 Bloomberg's [ts-blank-space](https://github.com/bloomberg/ts-blank-space) `0.9.0`)
 embedded as **precompiled QuickJS bytecode**. Every eval is type-checked against
 the `.d.ts` generated from your registered SDK — the type environment *is* the

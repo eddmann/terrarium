@@ -442,7 +442,7 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
      (`zend_first_try`/`zend_catch`) become the `$error` sentinel. Fibers
      compile but abort if used (real fibers need Asyncify).
    - **TypeScript** — QuickJS-ng `v0.15.1` with the real TypeScript compiler
-     `5.7.3` (and Bloomberg's ts-blank-space `0.9.0`) embedded as
+     `6.0.3` (and Bloomberg's ts-blank-space `0.9.0`) embedded as
      **precompiled QuickJS bytecode**
      (a *native* `qjsc` from the same pinned quickjs-ng tree generates it —
      bytecode is version-locked but architecture-portable). Two contexts, one

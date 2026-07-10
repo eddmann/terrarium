@@ -25,7 +25,7 @@ set -euo pipefail
 
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk}"
 QJS_VERSION="${QJS_VERSION:-v0.15.1}"
-TS_VERSION="${TS_VERSION:-5.7.3}"
+TS_VERSION="${TS_VERSION:-6.0.3}"
 TBS_VERSION="${TBS_VERSION:-0.9.0}"
 HOST_CC="${HOST_CC:-cc}"
 HERE="$(cd "$(dirname "$0")" && pwd)"

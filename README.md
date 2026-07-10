@@ -160,7 +160,7 @@ these. See each guest's README for build details and internals.
 - [**RustPython**](guests/rustpython/README.md) `0.5` — Python, pure Rust.
 - [**PHP**](guests/php/README.md) `8.3.14` — real php-src via its embed SAPI:
   sandboxed PHP *inside* PHP.
-- [**TypeScript**](guests/typescript/README.md) — QuickJS-ng + `tsc` `5.7.3` as
+- [**TypeScript**](guests/typescript/README.md) — QuickJS-ng + `tsc` `6.0.3` as
   bytecode; type-checked against the SDK, erased, and run — Wizer-snapshotted so a
   checked eval is ~20 ms warm.
 

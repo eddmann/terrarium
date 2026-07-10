@@ -15,7 +15,7 @@ vendored into this repository); their licenses are listed for attribution.
 | Component | Version | License | Upstream |
 |---|---|---|---|
 | QuickJS-ng | v0.15.1 | MIT | https://github.com/quickjs-ng/quickjs |
-| TypeScript compiler | 5.7.3 | Apache-2.0 | https://github.com/microsoft/TypeScript |
+| TypeScript compiler | 6.0.3 | Apache-2.0 | https://github.com/microsoft/TypeScript |
 | ts-blank-space | 0.9.0 | Apache-2.0 | https://github.com/bloomberg/ts-blank-space |
 | php-src | 8.3.14 | PHP License 3.01 | https://github.com/php/php-src |
 | Boa | 0.20 | Unlicense OR MIT | https://github.com/boa-dev/boa |
