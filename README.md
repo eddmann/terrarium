@@ -99,14 +99,15 @@ call's type argument** — the author writes the type, you get the contract:
 ```php
 $ts = new Terrarium('typescript_guest.wasm', typeArgumentSchemas: ['ctx.agent']);
 $ts->analyze('const v = ctx.agent<{ ok: boolean; note?: string }>({ … }); v;')['schemas'];
-// [['ordinal' => 0, 'callee' => 'ctx.agent',
+// [['ordinal' => 0, 'callee' => 'ctx.agent', 'line' => 1,
 //   'schema' => '{"type":"object","properties":{"ok":{"type":"boolean"},"note":{"type":"string"}},'
 //             . '"required":["ok"],"additionalProperties":false}']]
 ```
 
 Canonical JSON text, identified by call ordinal so reformatting can't repoint
-it, and anything with no faithful schema form is refused by member path rather
-than approximated. See
+it, carrying the call's line for consumers that must find their schema at
+runtime, and anything with no faithful schema form is refused by member path
+rather than approximated. See
 [docs/api.md](docs/api.md#type-argument-schemas).
 
 The sandbox is **synchronous** — there is no event loop, so a program that

@@ -207,7 +207,7 @@ final class Terrarium
      * unless the guest was constructed with `typeArgumentSchemas:`, in which
      * case the TypeScript guest returns one entry per matched call:
      *
-     *     ['ordinal' => 0, 'callee' => 'ctx.agent', 'schema' => '{"type":"object",…}']
+     *     ['ordinal' => 0, 'callee' => 'ctx.agent', 'line' => 1, 'schema' => '{"type":"object",…}']
      *
      * `schema` is canonical JSON TEXT — fixed key order, no whitespace — so the
      * same source always yields byte-identical bytes to bake, store, or hash.
@@ -219,11 +219,18 @@ final class Terrarium
      * `TSSchemaError` carrying that ordinal — so one bad call cannot renumber
      * the others.
      *
+     * `line` is not a second identity but a runtime bridge: the 1-based line of
+     * the CALL's start (the same convention the diagnostics use), carried beside
+     * `schema` and never inside it, for consumers whose compiled artifact is
+     * immutable per version and must therefore key their baked schemas by line.
+     * Entries are sorted by start position, so `line` is non-decreasing and two
+     * matched calls on one line share it.
+     *
      * Nothing executes, exactly as with `check()`.
      *
      * @return array{
      *     diagnostics: list<array{message: string, type?: string, line?: int, ordinal?: int}>,
-     *     schemas: list<array{ordinal: int, callee: string, schema: string}>
+     *     schemas: list<array{ordinal: int, callee: string, line: int, schema: string}>
      * }
      */
     public function analyze(string $source): array

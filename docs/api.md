@@ -176,7 +176,7 @@ $ts = new Terrarium('typescript_guest.wasm', typeArgumentSchemas: ['ctx.model', 
 $out = $ts->analyze('const v = ctx.agent<{ ok: boolean; note?: string }>({ ... }); v;');
 
 $out['schemas'];
-// [['ordinal' => 0, 'callee' => 'ctx.agent',
+// [['ordinal' => 0, 'callee' => 'ctx.agent', 'line' => 1,
 //   'schema' => '{"type":"object","properties":{"ok":{"type":"boolean"},"note":{"type":"string"}},'
 //             . '"required":["ok"],"additionalProperties":false}']]
 ```
@@ -187,7 +187,7 @@ TypeScript checker, and serialises it. This inverts the usual arrangement: the
 author writes the *type* and the host derives the schema, instead of the author
 writing a schema literal and inferring the type from it.
 
-Three properties make the result usable as a stored artifact:
+Four properties make the result usable as a stored artifact:
 
 - **`schema` is canonical JSON text.** Fixed key order (`type`, `properties`,
   `required`, `additionalProperties`; `type`, `items`), no whitespace, emitted
@@ -206,6 +206,19 @@ Three properties make the result usable as a stored artifact:
   `TSSchemaError` diagnostic (carrying `ordinal` in the data and `line` for the
   human) and no `schemas` entry, so one inexpressible type argument cannot
   renumber its neighbours.
+- **`line` is the runtime bridge, alongside the ordinal and never inside the
+  schema.** It is the 1-based line of the *call's start* in the submitted source
+  — the same convention `TSSchemaError` (and every other diagnostic) uses, so a
+  refusal and the entry it displaced name the same line — and entries stay
+  sorted by start position, so `line` is non-decreasing across them and two
+  matched calls on one line simply share it (whether that is allowed is the
+  consumer's policy, not the guest's). It exists because a consumer whose
+  compiled artifact is immutable per version can only key its baked schemas by
+  line: at execution time the running guest knows nothing but the line it is on,
+  so the ordinal → schema pairing is done once at publish time, when the source
+  and this extraction are both in hand. Being a sibling of `schema` rather than
+  a member of it is what keeps the schema bytes hashable: moving a call moves
+  its `line` and not one byte of its `schema`.
 
 Calls to a listed callee written *without* a type argument are untouched — no
 schema, no diagnostic. Schema-first authoring stays legal; deciding whether a

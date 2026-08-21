@@ -566,8 +566,9 @@ int64_t check(int32_t ptr, int32_t len) {
 /* `analyze(ptr, len)`: same argument, same analysis, a wider result — a msgpack
  * MAP { diagnostics: [...], schemas: [...] }. `schemas` is empty unless the host
  * set the `type_argument_schemas` compile option (reserved "$opts" cap), in
- * which case each entry is { ordinal, callee, schema } where `schema` is the
- * canonical JSON text derived from that call's single type argument. */
+ * which case each entry is { ordinal, callee, line, schema } where `schema` is
+ * the canonical JSON text derived from that call's single type argument and
+ * `line` is the 1-based line of the call's start in the submitted source. */
 __attribute__((export_name("analyze")))
 int64_t analyze(int32_t ptr, int32_t len) {
     return run_static("__terrariumAnalyze", "analyze", ptr, len);

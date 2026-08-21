@@ -10,6 +10,11 @@
 // other side can read back as the same type — so the accepted subset is small
 // and everything outside it is REFUSED, by member path, rather than approximated.
 //
+// Each entry is {ordinal, callee, line, schema}: the ordinal is the identity
+// (it survives a reformat), the line is the runtime bridge back to the call
+// site, and the schema is canonical JSON text whose bytes neither of the other
+// two may disturb.
+//
 // Skips cleanly until typescript_guest.wasm is built (see `make typescript-guest`).
 
 declare(strict_types=1);
@@ -41,6 +46,9 @@ function program(string $type): string
     return SDK . "\n" . DECLS . "\nconst r = ctx.agent<{$type}>({});\nr;\n";
 }
 
+/** The 1-based line `program()` puts its single call on: SDK, then DECLS. */
+const PROGRAM_LINE = 10;
+
 function guest(string $wasm): Terrarium
 {
     return new Terrarium($wasm, typeArgumentSchemas: ['ctx.model', 'ctx.agent']);
@@ -63,7 +71,11 @@ $accepts = function (string $type, string $expected) use ($wasm) {
         eq(1, count($out['schemas']));
         eq(0, $out['schemas'][0]['ordinal']);
         eq('ctx.agent', $out['schemas'][0]['callee']);
+        eq(PROGRAM_LINE, $out['schemas'][0]['line']);
         eq($expected, $out['schemas'][0]['schema']);
+        // The whole entry, so a field appearing or vanishing is caught here and
+        // not only where it is asserted.
+        eq(['ordinal', 'callee', 'line', 'schema'], array_keys($out['schemas'][0]));
     });
 };
 
@@ -214,6 +226,7 @@ check('calls are numbered in source order across all matched callees', function 
     eq([], $out['diagnostics']);
     eq([0, 1, 2, 3], array_column($out['schemas'], 'ordinal'));
     eq(['ctx.model', 'ctx.agent', 'ctx.agent', 'ctx.model'], array_column($out['schemas'], 'callee'));
+    eq([2, 3, 4, 5], array_column($out['schemas'], 'line'));
 });
 check('a refused call still consumes its ordinal (no renumbering)', function () use ($wasm) {
     $out = guest($wasm)->analyze(SDK . <<<'TS'
@@ -224,7 +237,9 @@ check('a refused call still consumes its ordinal (no renumbering)', function () 
         [a, b, c];
         TS);
     eq([0, 2], array_column($out['schemas'], 'ordinal'));
+    eq([2, 4], array_column($out['schemas'], 'line'));   // line follows the call, not the ordinal
     eq(1, schemaErrors($out)[0]['ordinal']);
+    eq(3, schemaErrors($out)[0]['line']);
 });
 check('reformatting changes no ordinal and no schema byte', function () use ($wasm) {
     // THE property. Line:column identity would break on every one of these
@@ -252,7 +267,13 @@ check('reformatting changes no ordinal and no schema byte', function () use ($wa
 
         [ renamed , second ] ;
         TS);
-    eq($original['schemas'], $reformatted['schemas']);
+    foreach (['ordinal', 'callee', 'schema'] as $field) {
+        eq(array_column($original['schemas'], $field), array_column($reformatted['schemas'], $field));
+    }
+    // `line` is the one field a reformat is allowed to move, which is exactly
+    // why it is not the identity: it is where the call sits in THIS text.
+    eq([2, 3], array_column($original['schemas'], 'line'));
+    eq([4, 8], array_column($reformatted['schemas'], 'line'));
 });
 check('adding a call ahead of the others DOES renumber them (documented)', function () use ($wasm) {
     // The ordinal is positional by design: the host re-extracts on every
@@ -260,6 +281,96 @@ check('adding a call ahead of the others DOES renumber them (documented)', funct
     $out = guest($wasm)->analyze(SDK . "\nconst z = ctx.agent<{ z: string }>({});\nconst a = ctx.agent<{ a: string }>({});\n[z, a];\n");
     eq('{"type":"object","properties":{"z":{"type":"string"}},"required":["z"],"additionalProperties":false}',
         $out['schemas'][0]['schema']);
+});
+
+echo "\nline: the runtime bridge back to the call site\n";
+// The ordinal is the identity; the line is how a consumer whose compiled
+// artifact is immutable per version finds its schema at RUNTIME. Inside the
+// running guest a call knows only what line it is on, so the host pairs
+// ordinal -> schema once at publish time and keys the baked schemas by line.
+check('line is the 1-based line of the call, matching the diagnostic convention', function () use ($wasm) {
+    // Same source, one expressible call and one refused, both on line 2: the
+    // TSSchemaError and the surviving entry name the same line, because both
+    // are computed from the CallExpression's getStart().
+    $out = guest($wasm)->analyze(
+        SDK . "\nconst ok = ctx.agent<{ a: string }>({}); const bad = ctx.agent<Date>({});\n[ok, bad];\n"
+    );
+    eq(2, $out['schemas'][0]['line']);
+    eq(2, schemaErrors($out)[0]['line']);
+});
+check('two matched calls on ONE line share it — extraction does not object', function () use ($wasm) {
+    // Whether one line may carry two schemas is the CONSUMER's policy. The
+    // extractor reports what is there; the ordinals still separate them.
+    $out = guest($wasm)->analyze(SDK . <<<'TS'
+
+        const pair = [ctx.agent<{ a: string }>({}), ctx.model<{ b: number }>({})];
+        pair;
+        TS);
+    eq([], $out['diagnostics']);
+    eq([0, 1], array_column($out['schemas'], 'ordinal'));
+    eq(['ctx.agent', 'ctx.model'], array_column($out['schemas'], 'callee'));
+    eq([2, 2], array_column($out['schemas'], 'line'));
+});
+check('line tracks the call start, not the type argument or the arguments', function () use ($wasm) {
+    // Callee, type argument and argument list each land on a different line;
+    // the entry reports where the call BEGINS.
+    $out = guest($wasm)->analyze(SDK . <<<'TS'
+
+        const wide = ctx
+            .agent<
+                { a: string }
+            >(
+                {},
+            );
+        wide;
+        TS);
+    eq([], $out['diagnostics']);
+    eq(1, count($out['schemas']));
+    eq(2, $out['schemas'][0]['line']);
+});
+check('entries are sorted by start position, so line is non-decreasing', function () use ($wasm) {
+    // The ordering guarantee a line-keyed consumer relies on: entries come in
+    // source order, never traversal order, so lines only ever repeat or grow.
+    $out = guest($wasm)->analyze(SDK . <<<'TS'
+
+        ctx.emit(ctx.agent<{ a: string }>({}));
+        const b = ctx.model<{ b: number }>({}), c = ctx.agent<{ c: boolean }>({});
+
+        const d = ctx.agent<{
+            d: null;
+        }>({});
+        [b, c, d];
+        TS);
+    eq([], $out['diagnostics']);
+    eq([0, 1, 2, 3], array_column($out['schemas'], 'ordinal'));
+    $lines = array_column($out['schemas'], 'line');
+    eq([2, 3, 3, 5], $lines);
+    $sorted = $lines;
+    sort($sorted);
+    eq($sorted, $lines);
+});
+check('the schema string is byte-identical wherever the call sits', function () use ($wasm) {
+    // The reason `line` is a SIBLING of `schema` and never a member of it:
+    // downstream hashes the schema text verbatim. These literals are the bytes
+    // the extractor produced before `line` existed — moving the call moves the
+    // line and not one byte of the schema.
+    $type = '{ verdicts: { id: string; judgment: "pass" | "fail" }[]; reviewed: boolean }';
+    $pinned = '{"type":"object","properties":{"verdicts":{"type":"array","items":{"type":"object","properties":'
+        . '{"id":{"type":"string"},"judgment":{"type":"string","enum":["pass","fail"]}},'
+        . '"required":["id","judgment"],"additionalProperties":false}},"reviewed":{"type":"boolean"}},'
+        . '"required":["verdicts","reviewed"],"additionalProperties":false}';
+
+    $ts = guest($wasm);
+    $near = $ts->analyze(SDK . "\nconst r = ctx.agent<{$type}>({});\nr;\n");
+    $far = $ts->analyze(SDK . str_repeat("\n// pushed down\n", 20) . "\nconst r = ctx.agent<{$type}>({});\nr;\n");
+
+    eq(2, $near['schemas'][0]['line']);
+    eq(42, $far['schemas'][0]['line']);
+    eq($pinned, $near['schemas'][0]['schema']);
+    eq($pinned, $far['schemas'][0]['schema']);
+    eq(0, strcmp($near['schemas'][0]['schema'], $far['schemas'][0]['schema']));
+    // And no `line` leaked inside the JSON text itself.
+    eq(false, str_contains($near['schemas'][0]['schema'], 'line'));
 });
 
 echo "\nwhat is NOT extracted\n";

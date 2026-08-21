@@ -123,7 +123,7 @@ const audit = ctx.agent<{ verdicts: { id: string; judgment: "pass" | "fail" }[] 
 ```php
 $ts = new Terrarium($wasm, typeArgumentSchemas: ['ctx.model', 'ctx.agent']);
 $ts->analyze($source)['schemas'];
-// [['ordinal' => 0, 'callee' => 'ctx.agent', 'schema' => '{"type":"object",…}']]
+// [['ordinal' => 0, 'callee' => 'ctx.agent', 'line' => 1, 'schema' => '{"type":"object",…}']]
 ```
 
 This is the inverse of schema-first authoring: the author writes the *type*, the
@@ -142,6 +142,13 @@ properties of *this* implementation:
   form still consumes its ordinal, yielding a `TSSchemaError` diagnostic that
   carries that ordinal in the data (and a line, for the human) instead of a
   schema — so one bad call cannot renumber its neighbours.
+- **`line` rides alongside it as the runtime bridge** — the 1-based line of the
+  call's start, computed exactly as the diagnostics compute theirs, so a
+  refusal and the entry it displaced agree. Entries keep their start-position
+  order, so `line` is non-decreasing and two matched calls on one line share it
+  without complaint; policing that is the consumer's business. It sits beside
+  `schema`, never within it, so the hashable schema bytes never move when a
+  call does.
 - **The JSON is emitted as text**, key by key, rather than `JSON.stringify`'d
   from an object: property order then follows declaration order exactly, and
   integer-like property names (`{ "2": string; "10": string }`) cannot be

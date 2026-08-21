@@ -519,7 +519,8 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
    `analyze(source)` is the widenable form of the same pass: the identical
    diagnostics plus whatever the host asked to be extracted — today the JSON
    Schema of each named call's type argument, identified by call ordinal so that
-   reformatting the source cannot repoint it.
+   reformatting the source cannot repoint it, and carrying the call's start line
+   for consumers that must key their baked schemas by line at runtime.
 
 ---
 

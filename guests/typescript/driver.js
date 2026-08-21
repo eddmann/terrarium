@@ -668,6 +668,17 @@
     // 0-based index among matched calls in source order. An inexpressible type
     // argument still CONSUMES its ordinal (it yields a diagnostic instead of a
     // schema) so that one bad call cannot renumber the ones after it.
+    //
+    // LINE, carried alongside it, is not a second identity: it is a runtime
+    // bridge. A consumer whose compiled artifact is immutable per version keys
+    // the baked schemas by line, because the code running inside the guest knows
+    // only its own line -- the ordinal->schema pairing is done at publish time,
+    // when the source and this extraction are both in hand. It is the 1-based
+    // line of the CALL's start (`getStart()`), the same convention diagnostics
+    // use, so a TSSchemaError and the entry it displaced name the same line.
+    // Entries stay sorted by start position, so `line` is non-decreasing across
+    // them; two matched calls on one line simply share it, and what to do about
+    // that is the consumer's policy, not the extractor's.
     function extractSchemas(program, callees) {
         var file = program.getSourceFile("/main.ts");
         if (!file) return { schemas: [], errors: [] };
@@ -677,17 +688,21 @@
         var errors = [];
         for (var i = 0; i < calls.length; i++) {
             var call = calls[i];
+            var line = file.getLineAndCharacterOfPosition(call.pos).line + 1;
             try {
                 var type = checker.getTypeFromTypeNode(call.node.typeArguments[0]);
                 var schema = schemaFromType(checker, type, "", false, []);
-                schemas.push({ ordinal: i, callee: call.callee, schema: schema.json });
+                // `line` is a SIBLING of `schema`, never a member of it: the
+                // schema text is hashed verbatim downstream, so not one of its
+                // bytes may move because a call did.
+                schemas.push({ ordinal: i, callee: call.callee, line: line, schema: schema.json });
             } catch (e) {
                 if (!(e instanceof SchemaError)) throw e;
                 errors.push({
                     message: "cannot derive a JSON Schema from the type argument of `" + call.callee +
                         "` (call #" + i + "): " + pathLabel(e.path) + ": " + e.reason,
                     type: SCHEMA_ERROR_TYPE,
-                    line: file.getLineAndCharacterOfPosition(call.pos).line + 1,
+                    line: line,
                     ordinal: i,
                 });
             }
