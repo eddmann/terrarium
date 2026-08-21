@@ -179,6 +179,24 @@ jobs:
   # The PHP library + the guest engines — platform-independent, and required
   # at runtime: the facade (lib/*.php) is the public API and the committed
   # *_guest.wasm fixtures are the curated engines the extension loads.
+  #
+  # LICENSING. The guest fixtures are COMPILED FROM third-party engines —
+  # QuickJS-ng (MIT), the TypeScript compiler and ts-blank-space (Apache-2.0),
+  # php-src, Boa, RustPython — so this archive redistributes all of them. MIT
+  # requires the license text to travel with the binary; Apache-2.0 §4 requires
+  # the license and, where the upstream ships one, its NOTICE. An archive of
+  # bare .wasm files satisfied neither. It now carries:
+  #
+  #   LICENSE                       Terrarium's own (MIT)
+  #   THIRD_PARTY_LICENSES.md       every engine's notice and full license text
+  #   third-party/typescript/…      TypeScript's LICENSE.txt and
+  #                                 ThirdPartyNoticeText.txt, verbatim from the
+  #                                 pinned npm package (refreshed by build.sh)
+  #   third-party/ts-blank-space/…  likewise
+  #
+  # The assertion step is not decoration: shipping a license-less archive is the
+  # exact failure being fixed, so a missing file fails the job instead of
+  # quietly publishing.
   # ──────────────────────────────────────────────────────────────────────
   lib-and-guests:
     name: php library + guest wasm
@@ -189,8 +207,37 @@ jobs:
         run: |
           ver="${{ inputs.version }}"
           ( cd lib && zip -qr "../terrarium-v${ver}-php-lib.zip" . )
-          ( cd tests/wasm && zip -qr "../../terrarium-v${ver}-guests.zip" *.wasm )
+          zip -qj "terrarium-v${ver}-php-lib.zip" LICENSE
+
+          staging="$(mktemp -d)"
+          cp tests/wasm/*.wasm "$staging/"
+          cp LICENSE THIRD_PARTY_LICENSES.md "$staging/"
+          cp -R guests/typescript/third-party "$staging/third-party"
+          ( cd "$staging" && zip -qr "$GITHUB_WORKSPACE/terrarium-v${ver}-guests.zip" . )
           ls -lh terrarium-*.zip
+
+      - name: Assert the archives carry their licenses
+        run: |
+          ver="${{ inputs.version }}"
+          fail=0
+          listing="$(unzip -Z1 "terrarium-v${ver}-guests.zip")"
+          for entry in \
+            LICENSE \
+            THIRD_PARTY_LICENSES.md \
+            third-party/README.md \
+            third-party/typescript/LICENSE.txt \
+            third-party/typescript/ThirdPartyNoticeText.txt \
+            third-party/ts-blank-space/LICENSE \
+            typescript_guest.wasm \
+            quickjs_guest.wasm
+          do
+            grep -qxF "$entry" <<<"$listing" \
+              || { echo "::error::guests archive is missing $entry"; fail=1; }
+          done
+          unzip -Z1 "terrarium-v${ver}-php-lib.zip" | grep -qxF 'LICENSE' \
+            || { echo "::error::php-lib archive is missing LICENSE"; fail=1; }
+          exit $fail
+
       - uses: actions/upload-artifact@v4
         with:
           name: lib-and-guests

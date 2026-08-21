@@ -115,8 +115,24 @@ authorization of the copyright holder.
 
 The TypeScript compiler is Copyright (c) Microsoft Corporation; ts-blank-space
 is Copyright (c) Bloomberg Finance L.P. Both are distributed under the Apache
-License 2.0, reproduced below. The TypeScript distribution additionally carries a
-third-party notice (`ThirdPartyNoticeText.txt`) available in its upstream package.
+License 2.0, reproduced below.
+
+Apache-2.0 §4 requires the license text — and, where the upstream ships one, its
+NOTICE — to travel with any redistribution, and `tests/wasm/typescript_guest.wasm`
+*is* a redistribution: both projects are compiled into it. Verbatim copies taken
+from the pinned npm packages are therefore committed under
+[`guests/typescript/third-party/`](guests/typescript/third-party/):
+
+| File | Source |
+|---|---|
+| `typescript/LICENSE.txt` | the `typescript` npm package |
+| `typescript/ThirdPartyNoticeText.txt` | the same — TypeScript's own third-party notice |
+| `ts-blank-space/LICENSE` | the `ts-blank-space` npm package |
+
+`guests/typescript/build.sh` refreshes that directory from the packages it just
+fetched, so it can never describe a version that is no longer the pin. The
+release workflow ships it inside the guest archive alongside this file and
+`LICENSE`, and fails the build if any of them is missing.
 
 Apache License
 
