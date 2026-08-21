@@ -35,6 +35,19 @@ pub const NAMES_CAP: &str = "$names";
 /// facade on every `register()`.
 pub const DTS_CAP: &str = "$dts";
 
+/// Reserved capability returning the host's per-instance **compile options** —
+/// a map the guest's compiler consults before it accepts a program. It is
+/// deliberately open: the host stores whatever map it is given and the guest
+/// reads the keys it understands, so a new option needs no ABI change and a
+/// guest that knows nothing about one simply ignores it. Guests that compile
+/// nothing (the plain engines) never call this.
+///
+/// The options the bundled guests define today are `sync_only` (bool), which
+/// the TypeScript guest enforces as a compile-time ban on async/generator
+/// syntax and on every use of a promise, and `type_argument_schemas` (a list of
+/// callee names) — see `guests/typescript/driver.js`.
+pub const OPTS_CAP: &str = "$opts";
+
 /// Shared host-side state behind the bridge. Single-threaded (PHP NTS), so
 /// `Rc`/`RefCell` interior mutability is sufficient and correct.
 #[derive(Default)]
@@ -52,6 +65,10 @@ pub struct BridgeState {
     /// The `.d.ts` of the registered SDK, served to type-aware guests via the
     /// reserved `$dts` capability. Kept current by the PHP facade on register().
     types_dts: RefCell<String>,
+    /// Compile options served to compiling guests via the reserved `$opts`
+    /// capability, as an insertion-ordered map. Empty by default — a guest then
+    /// sees an empty map and every option is off.
+    compile_options: RefCell<Vec<(String, MiddleValue)>>,
     /// Live PHP objects granted to the guest as opaque handles.
     pub handles: HandleTable,
 }
@@ -106,6 +123,11 @@ impl BridgeState {
         *self.types_dts.borrow_mut() = dts;
     }
 
+    /// Replace the compile options served via the reserved `$opts` capability.
+    pub fn set_compile_options(&self, options: Vec<(String, MiddleValue)>) {
+        *self.compile_options.borrow_mut() = options;
+    }
+
     /// Clear the captured output buffer (called at the start of each `eval`).
     pub fn clear_output(&self) {
         self.output.borrow_mut().clear();
@@ -140,6 +162,13 @@ impl BridgeState {
         // `.d.ts` to check submitted source against. Same pre-lookup intercept.
         if name == DTS_CAP {
             return Ok(MiddleValue::Str(self.types_dts.borrow().clone()));
+        }
+
+        // The reserved compile-options capability: a compiling guest asks what
+        // the host requires of the program before accepting it. Same pre-lookup
+        // intercept, so it cannot collide with a real capability.
+        if name == OPTS_CAP {
+            return Ok(MiddleValue::Map(self.compile_options.borrow().clone()));
         }
 
         let callable_zv = self

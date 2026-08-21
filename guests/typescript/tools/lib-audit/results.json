@@ -1,0 +1,994 @@
+{
+    "fixture": "tests/wasm/typescript_guest.wasm",
+    "fixtureSha256": "a90fb9606b41fc7b97c5b13f5c5b52d84bc780276d159480c29b13abe518a357",
+    "engine": "quickjs-ng v0.16.2",
+    "typescript": "6.0.3",
+    "currentPin": {
+        "target": "ES2024",
+        "lib": [
+            "lib.es2024.d.ts"
+        ]
+    },
+    "counts": {
+        "pass": 32,
+        "fail": 0,
+        "absent": 9
+    },
+    "parity": {
+        "breaches": [],
+        "conservative": [
+            "ahead.sharedArrayBuffer.plain",
+            "ahead.array.fromAsync",
+            "ahead.explicitResourceManagement"
+        ]
+    },
+    "probes": [
+        {
+            "id": "es2021.string.replaceAll",
+            "es": "ES2021",
+            "lib": "lib.es2021.string.d.ts",
+            "feature": "String.prototype.replaceAll",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "cb",
+                "observed": "cb",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2021.string.replaceAll.globalRegExp",
+            "es": "ES2021",
+            "lib": "lib.es2021.string.d.ts",
+            "feature": "String.prototype.replaceAll with a global RegExp",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "bXb",
+                "observed": "bXb",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2021.string.replaceAll.nonGlobalThrows",
+            "es": "ES2021",
+            "lib": "lib.es2021.string.d.ts",
+            "feature": "String.prototype.replaceAll rejects a non-global RegExp (spec step 2)",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "TypeError",
+                "observed": "TypeError",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2021.promise.any",
+            "es": "ES2021",
+            "lib": "lib.es2021.promise.d.ts",
+            "feature": "Promise.any",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "function",
+                "observed": "function",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "async-guard",
+                "evalThrew": "Terrarium\\GuestException: AsyncIncomplete: asynchronous guest code cannot complete: the program evaluated to a Promise, and the job queue is never drained here, so its continuation never ran. Write synchronous code \u2014 SDK calls return their values directly."
+            },
+            "note": "existence only: settling it needs the job queue, which this host never drains (AsyncIncomplete)"
+        },
+        {
+            "id": "es2021.aggregateError",
+            "es": "ES2021",
+            "lib": "lib.es2021.promise.d.ts",
+            "feature": "AggregateError with .errors",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "1:m:true",
+                "observed": "1:m:true",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2021.weakRef.deref",
+            "es": "ES2021",
+            "lib": "lib.es2021.weakref.d.ts",
+            "feature": "WeakRef.prototype.deref",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": 1,
+                "observed": 1,
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2021.finalizationRegistry",
+            "es": "ES2021",
+            "lib": "lib.es2021.weakref.d.ts",
+            "feature": "FinalizationRegistry register/unregister",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": true,
+                "observed": true,
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.array.at",
+            "es": "ES2022",
+            "lib": "lib.es2022.array.d.ts",
+            "feature": "Array.prototype.at (negative index)",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "b:3:undefined",
+                "observed": "b:3:undefined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.typedArray.at",
+            "es": "ES2022",
+            "lib": "lib.es2022.array.d.ts",
+            "feature": "%TypedArray%.prototype.at, every element kind",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "2,2,2,2,2,2,2,2,2,2,2",
+                "observed": "2,2,2,2,2,2,2,2,2,2,2",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.string.at",
+            "es": "ES2022",
+            "lib": "lib.es2022.string.d.ts",
+            "feature": "String.prototype.at",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "c:undefined",
+                "observed": "c:undefined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.object.hasOwn",
+            "es": "ES2022",
+            "lib": "lib.es2022.object.d.ts",
+            "feature": "Object.hasOwn (own only, not inherited)",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "true:false",
+                "observed": "true:false",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.error.cause",
+            "es": "ES2022",
+            "lib": "lib.es2022.error.d.ts",
+            "feature": "Error cause option",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "true:9:false",
+                "observed": "true:9:false",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
+            "note": "no cause option leaves the property absent, as the spec requires"
+        },
+        {
+            "id": "es2022.regexp.indices",
+            "es": "ES2022",
+            "lib": "lib.es2022.regexp.d.ts",
+            "feature": "RegExp `d` flag: hasIndices + match indices",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "[[0,2],[1,2]]:true:0,1:undefined:[0,1]",
+                "observed": "[[0,2],[1,2]]:true:0,1:undefined:[0,1]",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
+            "note": "also a SYNTAX gate: the `d` flag in a literal needs target >= ES2022 (TS1501)"
+        },
+        {
+            "id": "es2022.syntax.classFields",
+            "es": "ES2022",
+            "lib": "(syntax; gated by `target`, not by `lib`)",
+            "feature": "class instance + static fields",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": 3,
+                "observed": 3,
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.syntax.staticBlock",
+            "es": "ES2022",
+            "lib": "(syntax; gated by `target`, not by `lib`)",
+            "feature": "class static initialization block",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": 5,
+                "observed": 5,
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2022.syntax.privateNames",
+            "es": "ES2022",
+            "lib": "(syntax; gated by `target`, not by `lib`)",
+            "feature": "#private field, #private method, `#x in obj`",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "7:3:true",
+                "observed": "7:3:true",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2021.syntax.numericSeparators",
+            "es": "ES2021",
+            "lib": "(syntax; allowed already at the current pin)",
+            "feature": "numeric separators",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": 1000000,
+                "observed": 1000000,
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2023.array.findLast",
+            "es": "ES2023",
+            "lib": "lib.es2023.array.d.ts",
+            "feature": "Array.prototype.findLast / findLastIndex",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "2:1",
+                "observed": "2:1",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2023.array.changeByCopy",
+            "es": "ES2023",
+            "lib": "lib.es2023.array.d.ts",
+            "feature": "Array toSorted / toReversed / toSpliced / with (copying, original untouched)",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "[1,2,10]:[2,10,1]:[1,\"x\",2]:[9,10,2]:[1,10,2]",
+                "observed": "[1,2,10]:[2,10,1]:[1,\"x\",2]:[9,10,2]:[1,10,2]",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2023.typedArray.changeByCopy",
+            "es": "ES2023",
+            "lib": "lib.es2023.array.d.ts",
+            "feature": "%TypedArray% findLast / findLastIndex / toSorted / toReversed / with",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "2:2:1,2,10:2,10,1:9,10,2:1,3",
+                "observed": "2:2:1,2,10:2,10,1:9,10,2:1,3",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2023.collection.symbolKeys",
+            "es": "ES2023",
+            "lib": "lib.es2023.collection.d.ts",
+            "feature": "symbols as WeakMap/WeakSet/WeakRef keys (registered symbols still rejected)",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "1:true:symbol:TypeError",
+                "observed": "1:true:symbol:TypeError",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2023.syntax.hashbang",
+            "es": "ES2023",
+            "lib": "(syntax; hashbang grammar)",
+            "feature": "hashbang comment as the first line",
+            "kind": "raw",
+            "engine": {
+                "verdict": "implemented",
+                "expected": 42,
+                "observed": 42,
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
+            "note": "must be the very first byte, so it cannot carry a preceding @ts-nocheck"
+        },
+        {
+            "id": "es2024.object.groupBy",
+            "es": "ES2024",
+            "lib": "lib.es2024.object.d.ts",
+            "feature": "Object.groupBy (null-prototype result)",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "{\"odd\":[1,3],\"even\":[2]}:true",
+                "observed": "{\"odd\":[1,3],\"even\":[2]}:true",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2024.collection.mapGroupBy",
+            "es": "ES2024",
+            "lib": "lib.es2024.collection.d.ts",
+            "feature": "Map.groupBy",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "1,3:true",
+                "observed": "1,3:true",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2024.promise.withResolvers",
+            "es": "ES2024",
+            "lib": "lib.es2024.promise.d.ts",
+            "feature": "Promise.withResolvers",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "function,function,function",
+                "observed": "function,function,function",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2024.string.wellFormed",
+            "es": "ES2024",
+            "lib": "lib.es2024.string.d.ts",
+            "feature": "String isWellFormed / toWellFormed",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "true:false:fffd",
+                "observed": "true:false:fffd",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
+            "note": "a lone surrogate becomes U+FFFD, per spec"
+        },
+        {
+            "id": "es2024.arrayBuffer.resizable",
+            "es": "ES2024",
+            "lib": "lib.es2024.arraybuffer.d.ts",
+            "feature": "resizable ArrayBuffer: resizable / maxByteLength / resize",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "true:16:12:false:8",
+                "observed": "true:16:12:false:8",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2024.arrayBuffer.transfer",
+            "es": "ES2024",
+            "lib": "lib.es2024.arraybuffer.d.ts",
+            "feature": "ArrayBuffer transfer / transferToFixedLength / detached",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "true:8:0:4:false",
+                "observed": "true:8:0:4:false",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            }
+        },
+        {
+            "id": "es2024.regexp.unicodeSets",
+            "es": "ES2024",
+            "lib": "lib.es2024.regexp.d.ts",
+            "feature": "RegExp `v` flag: unicodeSets, set difference/intersection, string properties",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "true:true:false:true:true",
+                "observed": "true:true:false:true:true",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": true,
+                "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
+            "note": "also a SYNTAX gate: the `v` flag in a literal needs target >= ES2024 (TS1501)"
+        },
+        {
+            "id": "absent.atomics",
+            "es": "ES2017 (already declared at the current pin)",
+            "lib": "lib.es2017.sharedmemory.d.ts",
+            "feature": "Atomics",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "ReferenceError:Atomics is not defined",
+                "observed": "ReferenceError:Atomics is not defined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2583",
+                        "line": 1,
+                        "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
+                    },
+                    {
+                        "code": "TS2583",
+                        "line": 2,
+                        "message": "Cannot find name 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. [+1 more error] (line 1)"
+            },
+            "note": "PRE-EXISTING type/runtime mismatch: the ES2020 pin already declares Atomics, which the engine does not have at all"
+        },
+        {
+            "id": "absent.atomics.waitAsync",
+            "es": "ES2024",
+            "lib": "lib.es2024.sharedmemory.d.ts",
+            "feature": "Atomics.waitAsync",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "undefined",
+                "observed": "undefined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2583",
+                        "line": 1,
+                        "message": "Cannot find name 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
+                    },
+                    {
+                        "code": "TS2583",
+                        "line": 1,
+                        "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. [+1 more error] (line 1)"
+            }
+        },
+        {
+            "id": "absent.sharedArrayBuffer.growable",
+            "es": "ES2024",
+            "lib": "lib.es2024.sharedmemory.d.ts",
+            "feature": "growable SharedArrayBuffer (grow / growable / maxByteLength)",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "false:8:TypeError:growable SharedArrayBuffer requires SAB allocator hooks:TypeError:array buffer is not resizable",
+                "observed": "false:8:TypeError:growable SharedArrayBuffer requires SAB allocator hooks:TypeError:array buffer is not resizable",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2583",
+                        "line": 1,
+                        "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. (line 1)"
+            },
+            "note": "HALF-WORKS: SharedArrayBuffer exists and the grow/growable/maxByteLength members exist, but a growable SAB can never be constructed in this build, so grow() can never succeed"
+        },
+        {
+            "id": "absent.structuredClone",
+            "es": "(HTML, not ECMAScript)",
+            "lib": "lib.dom.d.ts / lib.webworker.d.ts (never bundled)",
+            "feature": "structuredClone",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "ReferenceError:structuredClone is not defined",
+                "observed": "ReferenceError:structuredClone is not defined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2304",
+                        "line": 1,
+                        "message": "Cannot find name 'structuredClone'."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2304: Cannot find name 'structuredClone'. (line 1)"
+            },
+            "note": "absent from the engine AND from every bundled lib, so the two already agree; the raise cannot introduce it"
+        },
+        {
+            "id": "residual.intl.core",
+            "es": "ES5 (already declared at the current pin)",
+            "lib": "lib.es5.d.ts (the `declare namespace Intl` block)",
+            "feature": "Intl.NumberFormat / Intl.DateTimeFormat / Intl.Collator",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "ReferenceError:Intl is not defined",
+                "observed": "ReferenceError:Intl is not defined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2708",
+                        "line": 1,
+                        "message": "Cannot use namespace 'Intl' as a value."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. (line 1)"
+            },
+            "note": "PRE-EXISTING and NOT fixable at lib-file granularity: the Intl namespace is declared inside lib.es5.d.ts, which cannot be dropped. Unchanged by the raise; needs a stripped-lib variant of its own"
+        },
+        {
+            "id": "absent.intl.listFormat",
+            "es": "ES2021",
+            "lib": "lib.es2021.intl.d.ts",
+            "feature": "Intl.ListFormat",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "undefined",
+                "observed": "undefined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2708",
+                        "line": 1,
+                        "message": "Cannot use namespace 'Intl' as a value."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. (line 1)"
+            }
+        },
+        {
+            "id": "absent.intl.segmenter",
+            "es": "ES2022",
+            "lib": "lib.es2022.intl.d.ts",
+            "feature": "Intl.Segmenter / Intl.supportedValuesOf",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "absent",
+                "observed": "absent",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2708",
+                        "line": 1,
+                        "message": "Cannot use namespace 'Intl' as a value."
+                    },
+                    {
+                        "code": "TS2708",
+                        "line": 2,
+                        "message": "Cannot use namespace 'Intl' as a value."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. [+1 more error] (line 1)"
+            }
+        },
+        {
+            "id": "absent.intl.numberFormatV3",
+            "es": "ES2023",
+            "lib": "lib.es2023.intl.d.ts",
+            "feature": "Intl.NumberFormat v3 (formatRange)",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "undefined",
+                "observed": "undefined",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2708",
+                        "line": 1,
+                        "message": "Cannot use namespace 'Intl' as a value."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. (line 1)"
+            }
+        },
+        {
+            "id": "ahead.sharedArrayBuffer.plain",
+            "es": "ES2017",
+            "lib": "lib.es2017.sharedmemory.d.ts (excluded by the proposal)",
+            "feature": "plain (non-growable) SharedArrayBuffer",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "8:8",
+                "observed": "8:8",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2583",
+                        "line": 1,
+                        "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "conservative",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. (line 1)"
+            },
+            "note": "the engine HAS it, but the proposal drops the declaration with the rest of the shared-memory chain: no Atomics, no workers, no growth, so it is an ArrayBuffer with a misleading name. Under-declaring is the safe direction"
+        },
+        {
+            "id": "ahead.array.fromAsync",
+            "es": "ESNext",
+            "lib": "lib.esnext.array.d.ts (outside the proposed chain)",
+            "feature": "Array.fromAsync",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "function",
+                "observed": "function",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2550",
+                        "line": 1,
+                        "message": "Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "conservative",
+                "evalThrew": "Terrarium\\GuestException: TS2550: Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later. (line 1)"
+            },
+            "note": "engine is AHEAD of the proposed lib: it exists but stays undeclared (async anyway, so unusable here). Under-declaring is the safe direction"
+        },
+        {
+            "id": "ahead.explicitResourceManagement",
+            "es": "ESNext",
+            "lib": "lib.esnext.disposable.d.ts (outside the proposed chain)",
+            "feature": "`using` declarations + Symbol.dispose",
+            "kind": "runtime",
+            "engine": {
+                "verdict": "implemented",
+                "expected": "symbol:true",
+                "observed": "symbol:true",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2318",
+                        "line": null,
+                        "message": "Cannot find global type 'Disposable'."
+                    },
+                    {
+                        "code": "TS2550",
+                        "line": 1,
+                        "message": "Property 'dispose' does not exist on type 'SymbolConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "conservative",
+                "evalThrew": "Terrarium\\GuestException: TS2318: Cannot find global type 'Disposable'. [+1 more error]"
+            },
+            "note": "engine is AHEAD of the proposed lib; left undeclared deliberately (esnext is not a stable pin)"
+        },
+        {
+            "id": "mismatch.accessorKeyword",
+            "es": "ES2022 decorators (auto-accessors)",
+            "lib": "(syntax; the checker accepts it at every target)",
+            "feature": "`accessor` class fields",
+            "kind": "absent",
+            "engine": {
+                "verdict": "absent-as-expected",
+                "expected": "SyntaxError",
+                "observed": "SyntaxError",
+                "threw": null
+            },
+            "gateAtCurrentPin": {
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TSEngineUnsupported",
+                        "line": 1,
+                        "message": "`accessor` class members are not supported: the sandbox engine (quickjs-ng v0.16.2) raises a SyntaxError on the `accessor` keyword, so this would type-check and then fail to parse at run time. Declare a private field with an explicit `get`/`set` pair instead."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TSEngineUnsupported: `accessor` class members are not supported: the sandbox engine (quickjs-ng v0.16.2) raises a SyntaxError on the `accessor` keyword, so this would type-check and then fail to parse at run time. Declare a private field with an explicit `get`/`set` pair instead. (line 1)"
+            },
+            "note": "PRE-EXISTING syntax mismatch, independent of this raise: the checker accepts `accessor` at ES2020 and at ES2024, ts-blank-space passes it through, and the engine rejects it with a SyntaxError"
+        }
+    ]
+}

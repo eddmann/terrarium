@@ -1,0 +1,112 @@
+Phase 2 of the T4 ES-library audit: raise the TypeScript guest's compiler pin
+from ES2020 to ES2024, and exclude the lib files the engine does not back.
+
+  PREPARED, NOT APPLIED. Apply from the repository root:
+      patch -p1 < guests/typescript/tools/lib-audit/phase2-lib-raise.patch
+  then rebuild the fixture (`make typescript-guest`) -- driver.js is compiled to
+  QuickJS bytecode and baked into tests/wasm/typescript_guest.wasm, so nothing
+  changes until it is rebuilt.
+
+  Generated against guests/typescript/driver.js sha256:9c5456f9539c8be3...
+  Evidence: results.json (engine verdicts, real fixture), proposal.json (checker
+  verdicts per pin), delta.json (what the raise declares).
+  Verified end-to-end: applying this patch to a copy of driver.js and running
+  `node dryrun-driver.mjs <copy> --expect proposed` reproduces proposal.json's
+  proposed pin exactly, with 0 mismatches.
+
+--- a/guests/typescript/driver.js
++++ b/guests/typescript/driver.js
+@@ -37,6 +37,40 @@
+     var lastProgram;
+     var lastDts;
+ 
++    // The compiler pin. The engine is quickjs-ng v0.16.2, which implements every
++    // ES2021-ES2024 library addition this sandbox can reach; the audit behind
++    // these two lines is guests/typescript/tools/lib-audit/ (probe corpus,
++    // per-feature engine verdicts, and the checker's verdict at each pin), and
++    // its findings are pinned as behaviour by tests/php/11_es_surface.php.
++    var TARGET = ts.ScriptTarget.ES2024;
++    var LIB_ROOT = "lib.es2024.d.ts";
++
++    // Lib files the engine does NOT back, served empty rather than declared:
++    // the type environment must equal the real execution environment, and a
++    // declaration the engine cannot honour is checked-clean code that dies at
++    // run time.
++    //   *.intl.d.ts          quickjs-ng is built without Intl -- `typeof Intl`
++    //                        is "undefined". Only the locale-blind
++    //                        toLocaleString/localeCompare declared in lib.es5
++    //                        actually exist.
++    //   *.sharedmemory.d.ts  there is no Atomics global at all, and a growable
++    //                        SharedArrayBuffer cannot be constructed ("growable
++    //                        SharedArrayBuffer requires SAB allocator hooks"),
++    //                        so ES2024's grow/growable/maxByteLength can never
++    //                        succeed. Plain SharedArrayBuffer does exist, but
++    //                        with no Atomics and no workers it is an ArrayBuffer
++    //                        under a misleading name: dropped with the rest.
++    // Emptying a file keeps the /// <reference lib=...> graph intact, so the
++    // chain still resolves. lib.es5.d.ts's own `declare namespace Intl` is not
++    // reachable at file granularity and stays declared -- a pre-existing gap
++    // this pin neither widens nor closes.
++    var LIB_EXCLUDED = /\.(intl|sharedmemory)\.d\.ts$/;
++
++    function libText(short) {
++        if (LIBS[short] === undefined) return undefined;
++        return LIB_EXCLUDED.test(short) ? "" : LIBS[short];
++    }
++
+     // What the guest prelude actually provides at runtime beyond the language
+     // itself. The type environment must equal the real execution environment.
+     var RUNTIME_DTS =
+@@ -61,8 +95,8 @@
+         files["/sdk.d.ts"] = RUNTIME_DTS + (sdkDts || "");
+ 
+         var options = {
+-            target: ts.ScriptTarget.ES2020,
+-            lib: ["lib.es2020.d.ts"],
++            target: TARGET,
++            lib: [LIB_ROOT],
+             strict: true,
+             noEmit: true,
+             types: [],
+@@ -71,18 +105,19 @@
+         var host = {
+             getSourceFile: function (name, lang) {
+                 if (files[name] !== undefined) {
+-                    return ts.createSourceFile(name, files[name], lang || ts.ScriptTarget.ES2020, true);
++                    return ts.createSourceFile(name, files[name], lang || TARGET, true);
+                 }
+                 var short = libName(name);
+-                if (LIBS[short] !== undefined) {
++                var text = libText(short);
++                if (text !== undefined) {
+                     if (!libCache[short]) {
+-                        libCache[short] = ts.createSourceFile(name, LIBS[short], ts.ScriptTarget.ES2020, true);
++                        libCache[short] = ts.createSourceFile(name, text, TARGET, true);
+                     }
+                     return libCache[short];
+                 }
+                 return undefined;
+             },
+-            getDefaultLibFileName: function () { return LIB_DIR + "lib.es2020.d.ts"; },
++            getDefaultLibFileName: function () { return LIB_DIR + LIB_ROOT; },
+             getDefaultLibLocation: function () { return LIB_DIR; },
+             writeFile: function () {},
+             getCurrentDirectory: function () { return "/"; },
+@@ -90,7 +125,7 @@
+             useCaseSensitiveFileNames: function () { return true; },
+             getNewLine: function () { return "\n"; },
+             fileExists: function (f) { return files[f] !== undefined || LIBS[libName(f)] !== undefined; },
+-            readFile: function (f) { return files[f] !== undefined ? files[f] : LIBS[libName(f)]; },
++            readFile: function (f) { return files[f] !== undefined ? files[f] : libText(libName(f)); },
+         };
+ 
+         var program = ts.createProgram(
+@@ -178,7 +213,7 @@
+     // Every async/generator construct in `source`, as {message, type, line},
+     // in source order. Empty when the source is already synchronous.
+     function syncOnlyErrors(source) {
+-        var file = ts.createSourceFile("/main.ts", source, ts.ScriptTarget.ES2020, true);
++        var file = ts.createSourceFile("/main.ts", source, TARGET, true);
+         var found = [];
+ 
+         function report(kind, pos) {

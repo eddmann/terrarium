@@ -184,15 +184,28 @@ guest_alloc(len: i32) -> i32 ; bump/realloc area for host→guest writes
 eval(ptr: i32, len: i32) -> i64  ; run source msgpack at (ptr,len); return packed
 ```
 
-One **optional** export extends it: `check(ptr, len) -> i64` — same byte ABI,
-but the guest statically validates the source *without running it* and returns
-a msgpack **array** of diagnostics (`{message, type?, line?}`; empty = passed).
-Surfaced as `Terrarium::check()`. Every bundled guest implements it at the
-depth its language allows: the TypeScript guest runs a full type-check against
-the SDK; the JS, Python, and PHP guests report syntax/compile errors (PHP's is
-literally `php -l` over the same wrapped form `eval` executes). Nothing
-executes, no capability can fire, and the output buffer is untouched. A guest
-without the export raises a `Terrarium\Exception`.
+Two **optional** exports extend it, both with the same byte ABI and the same
+guarantee that nothing executes, no capability can fire, and the output buffer
+is untouched:
+
+- `check(ptr, len) -> i64` — statically validate the source and return a msgpack
+  **array** of diagnostics (`{message, type?, line?}`; empty = passed). Surfaced
+  as `Terrarium::check()`. Every bundled guest implements it at the depth its
+  language allows: the TypeScript guest runs a full type-check against the SDK;
+  the JS, Python, and PHP guests report syntax/compile errors (PHP's is literally
+  `php -l` over the same wrapped form `eval` executes).
+- `analyze(ptr, len) -> i64` — the same analysis, a wider result: a msgpack
+  **map** `{diagnostics, schemas}`. Surfaced as `Terrarium::analyze()`. Only the
+  TypeScript guest implements it; `schemas` carries the JSON Schema derived from
+  the type argument of each call named by the `type_argument_schemas` compile
+  option (see [api](api.md#type-argument-schemas)).
+
+Two entrypoints rather than one wider `check()` on purpose: the diagnostics
+array is the older contract and is now frozen, so anything richer joins
+`analyze()`'s map without a host ever having to sniff a version. The transport
+is shape-agnostic — both go through the same marshal-and-unpack round trip — so
+widening the result cost no ABI change. A guest without the export raises a
+`Terrarium\Exception`.
 
 A small **prelude** baked into each engine guest hides all of this: at startup it
 queries the host for the registered top-level names (the reserved `$names`
@@ -357,9 +370,14 @@ what a fix-up loop needs.
 All of this reuses the *one* `host_call` import and the *one* `eval` return
 path — `$out` is a reserved name, `$error` is a reserved result shape, `$names`
 is queried once at startup to learn which top-level globals to install (there is
-no synthetic root), and `$dts` serves the SDK's generated `.d.ts` to the
-type-aware TypeScript guest. No new wasm import, no ABI change; the guest stays
-dumb and all policy lives host-side.
+no synthetic root), `$dts` serves the SDK's generated `.d.ts` to the type-aware
+TypeScript guest, and `$opts` serves the host's **compile options** — an open
+map a compiling guest consults before accepting a program (today `sync_only`,
+which the TypeScript guest enforces as a ban on async/generator syntax and on
+every use of a promise, and `type_argument_schemas`; see
+[api](api.md#synchronous-only-guests)). Adding an option therefore costs no new
+wasm import and no ABI change: a guest reads the keys it knows and ignores the
+rest. The guest stays dumb and all policy lives host-side.
 
 ---
 
@@ -420,7 +438,7 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
    `Cargo.toml` is the source of truth); the committed fixtures are built from
    these pins.
    - **Boa** `0.20` (pure-Rust JS) on `wasm32-unknown-unknown`, no C toolchain.
-   - **QuickJS-ng** `v0.15.1` — JavaScript, compiled from C with the WASI SDK
+   - **QuickJS-ng** `v0.16.2` — JavaScript, compiled from C with the WASI SDK
      (reactor mode) behind the identical host ABI.
    - **RustPython** `0.5` (pure-Rust Python) on `wasm32-unknown-unknown`.
    - **PHP** `8.3.14` — real php-src via its embed SAPI (`php_embed_init` /
@@ -441,7 +459,7 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
      SAPI `ub_write` hook into `$out`; uncaught exceptions *and* fatal errors
      (`zend_first_try`/`zend_catch`) become the `$error` sentinel. Fibers
      compile but abort if used (real fibers need Asyncify).
-   - **TypeScript** — QuickJS-ng `v0.15.1` with the real TypeScript compiler
+   - **TypeScript** — QuickJS-ng `v0.16.2` with the real TypeScript compiler
      `6.0.3` (and Bloomberg's ts-blank-space `0.9.0`) embedded as
      **precompiled QuickJS bytecode**
      (a *native* `qjsc` from the same pinned quickjs-ng tree generates it —
@@ -490,15 +508,20 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
    a per-`eval` buffer (`output()`); guest-program errors raise
    `Terrarium\GuestException` with a `Type: message (line N)` message (§11).
 7. **The single uniform API.** One public `Terrarium` class
-   (`register`/`eval`/`check`/`output`/`types`/`grant`/`resolve`/`revoke`/
-   `manifest`/`reset`) over the `Terrarium\Runtime` engine primitive — no
-   low-level/legacy surface; the typed-author experience is delivered by
+   (`register`/`eval`/`check`/`analyze`/`output`/`types`/`grant`/`resolve`/
+   `revoke`/`manifest`/`reset`) over the `Terrarium\Runtime` engine primitive —
+   no low-level/legacy surface; the typed-author experience is delivered by
    PHP-side inference over the one byte ABI (§6).
 8. **Static validation without execution.** `check(source)` returns every
    diagnostic as data (`{message, type?, line?}`; `[]` = passed) via the
    optional `check` guest export (§6) — all five guests implement it: a full
    type-check against the SDK in the TypeScript guest, a syntax/compile check
    in the JS, Python, and PHP guests. An explicit check ignores `@ts-nocheck`.
+   `analyze(source)` is the widenable form of the same pass: the identical
+   diagnostics plus whatever the host asked to be extracted — today the JSON
+   Schema of each named call's type argument, identified by call ordinal so that
+   reformatting the source cannot repoint it, and carrying the call's start line
+   for consumers that must key their baked schemas by line at runtime.
 
 ---
 

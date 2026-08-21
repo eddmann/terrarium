@@ -92,6 +92,40 @@ returns *every* diagnostic as data (`[]` = passed). It works on every guest at t
 depth its language allows (a full type-check here; a syntax/compile check on the
 JS, Python, and PHP guests). See [docs/api.md](docs/api.md).
 
+`analyze()` is the same pass with more of the compiler's knowledge handed back.
+Name some callees and the TypeScript guest derives a **JSON Schema from each
+call's type argument** — the author writes the type, you get the contract:
+
+```php
+$ts = new Terrarium('typescript_guest.wasm', typeArgumentSchemas: ['ctx.agent']);
+$ts->analyze('const v = ctx.agent<{ ok: boolean; note?: string }>({ … }); v;')['schemas'];
+// [['ordinal' => 0, 'callee' => 'ctx.agent', 'line' => 1,
+//   'schema' => '{"type":"object","properties":{"ok":{"type":"boolean"},"note":{"type":"string"}},'
+//             . '"required":["ok"],"additionalProperties":false}']]
+```
+
+Canonical JSON text, identified by call ordinal so reformatting can't repoint
+it, carrying the call's line for consumers that must find their schema at
+runtime, and anything with no faithful schema form is refused by member path
+rather than approximated. See
+[docs/api.md](docs/api.md#type-argument-schemas).
+
+The sandbox is **synchronous** — there is no event loop, so a program that
+suspends can never resume. That failure is never silent: a JS/TS eval that
+yields a promise, leaves callbacks queued, or registers a promise reaction
+raises `AsyncIncomplete`, and `new Terrarium(..., syncOnly: true)` makes the
+TypeScript guest reject `async`, `await`, `function*`, `yield` **and every use
+of a promise** at compile time, with the source line and a message naming the
+synchronous alternative. Exactly what the run-time guard does and does not catch
+is spelled out in
+[errors.md](docs/errors.md#exactly-what-asyncincomplete-catches-and-what-it-does-not);
+see also [synchronous-only guests](docs/api.md#synchronous-only-guests).
+
+The TypeScript guest's `check()` also refuses what the sandbox **engine** cannot
+parse even though the compiler accepts it (`accessor` class members), and its
+`lib` declares nothing the engine lacks (no `Intl`, no `Atomics`) — so a clean
+`check()` means "this will run", not merely "this type-checks".
+
 ## Installation
 
 Prebuilt binaries are attached to each
@@ -154,7 +188,7 @@ Five are bundled; the same bridge serves any language that targets WASM. Each
 guest pins the upstream version it tracks; the committed fixtures are built from
 these. See each guest's README for build details and internals.
 
-- [**QuickJS-ng**](guests/quickjs/README.md) `v0.15.1` — JavaScript, C via the
+- [**QuickJS-ng**](guests/quickjs/README.md) `v0.16.2` — JavaScript, C via the
   WASI SDK (the reference guest).
 - [**Boa**](guests/boa/README.md) `0.20` — JavaScript, pure Rust (no C toolchain).
 - [**RustPython**](guests/rustpython/README.md) `0.5` — Python, pure Rust.

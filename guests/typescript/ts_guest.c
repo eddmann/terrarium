@@ -24,6 +24,25 @@
  * A check failure comes back as the standard sentinel
  * { "$error": {message: "TS2345: ...", type: "TS2345", line} }.
  *
+ * Asynchrony, which this environment does not have (nothing drains the job
+ * queue), is handled at both ends:
+ *  - compile time, opt-in: the host's compile options (reserved "$opts" cap)
+ *    are passed to the driver per eval/check; with `sync_only` it rejects
+ *    async/generator syntax AND every use of a promise as `TSSyncOnly`
+ *    diagnostics, even under `@ts-nocheck` — it is a host constraint, not an
+ *    author preference;
+ *  - run time, always: an eval that yields a Promise, leaves jobs queued, or
+ *    registered any promise reaction returns the sentinel typed
+ *    `AsyncIncomplete` instead of half a run.
+ *
+ * Syntax the ENGINE cannot parse but the checker accepts (`accessor` class
+ * members) is rejected by the driver as `TSEngineUnsupported`, always on.
+ *
+ * Two static exports, one analysis: `check` returns the diagnostics array (the
+ * original contract, unchanged), `analyze` returns {diagnostics, schemas} —
+ * where `schemas` carries the JSON Schema derived from the type argument of
+ * each call the `type_argument_schemas` compile option names.
+ *
  * Built with the WASI SDK in reactor mode; see build.sh.
  */
 #include <stdint.h>
@@ -263,6 +282,15 @@ static const char PRELUDE[] =
     "  var fmt = function(x){ return (typeof x === 'object' && x !== null) ? JSON.stringify(x) : String(x); };"
     "  var emit = function(){ __host('$out', Array.prototype.slice.call(arguments).map(fmt).join(' ')); };"
     "  return { log: emit, error: emit, warn: emit, info: emit, debug: emit };"
+    "})();"
+    /* Promise-reaction counter -- see async_incomplete_reason(), and the plain
+     * QuickJS guest's copy of this comment for the full reasoning. */
+    "(function(){"
+    "  var n = 0, proto = Promise.prototype, base = proto.then;"
+    "  Object.defineProperty(proto, 'then', {"
+    "    value: function(a, b){ n++; return base.call(this, a, b); },"
+    "    writable: true, configurable: true });"
+    "  Object.defineProperty(globalThis, '__terrariumReactions', { value: function(){ return n; } });"
     "})();";
 
 /* ------------------------------------------------------------------ */
@@ -335,6 +363,65 @@ static int64_t ret_error_exc(JSContext *ctx, JSValueConst exc) {
     JS_FreeValue(ctx, jstack);
     return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* asynchronous programs cannot complete here                          */
+/* ------------------------------------------------------------------ */
+
+/* Identical reasoning (and wording) to the plain QuickJS guest: nothing in the
+ * sandbox calls JS_ExecutePendingJob, so the job queue is never drained and a
+ * suspended program never resumes. Detect it instead of returning half a run.
+ *
+ *   - JS_IsPromise on the result, in ANY state — an already-fulfilled promise
+ *     is still a failure, because `.then` callbacks are queued rather than
+ *     called, so the chain's continuations never ran.
+ *   - JS_IsJobPending on the user runtime — the program returned a plain value
+ *     but left work behind it.
+ *   - the prelude's promise-reaction counter — a `.then` on a promise that
+ *     never settles queues no job at all, so neither check above sees it. The
+ *     full argument for why a non-zero count is a sound verdict (and the one
+ *     residual gap it does not close) is in guests/quickjs/quickjs_guest.c.
+ *
+ * This is on by default and independent of the `sync_only` compile option: the
+ * option refuses the syntax up front (TypeScript only), this catches whatever
+ * reaches run time anyway — `@ts-nocheck` source, a Promise built without
+ * `async`/`await`, or any other guest. Returns the reason, or NULL. */
+static int async_reactions(JSContext *ctx) {
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, g, "__terrariumReactions");
+    JS_FreeValue(ctx, g);
+    int n = 0;
+    if (JS_IsFunction(ctx, fn)) {
+        JSValue v = JS_Call(ctx, fn, JS_UNDEFINED, 0, NULL);
+        int32_t got = 0;
+        if (!JS_IsException(v) && JS_ToInt32(ctx, &got, v) == 0 && got > 0) n = (int)got;
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, fn);
+    return n;
+}
+
+static const char *async_incomplete_reason(JSRuntime *rt, JSContext *ctx, JSValueConst v) {
+    if (JS_IsPromise(v)) {
+        return "asynchronous guest code cannot complete: the program evaluated to a Promise, and "
+               "the job queue is never drained here, so its continuation never ran. Write "
+               "synchronous code — SDK calls return their values directly.";
+    }
+    if (JS_IsJobPending(rt)) {
+        return "asynchronous guest code cannot complete: the program left queued jobs (a promise "
+               "callback or an async continuation), and the job queue is never drained here, so "
+               "they never ran. Write synchronous code — SDK calls return their values directly.";
+    }
+    if (async_reactions(ctx) > 0) {
+        return "asynchronous guest code cannot complete: the program registered a promise reaction "
+               "(`.then` / `.catch` / `.finally`), and the job queue is never drained here, so the "
+               "callback never ran — the promise it is waiting on can never settle. Write "
+               "synchronous code — SDK calls return their values directly.";
+    }
+    return NULL;
+}
+
+#define ASYNC_INCOMPLETE_TYPE "AsyncIncomplete"
 
 /* ------------------------------------------------------------------ */
 /* the persistent compiler context                                     */
@@ -425,34 +512,46 @@ void wizer_initialize(void) {
     JS_FreeValue(g_cctx, r);
 }
 
-/* Fetch the SDK .d.ts from the host (reserved "$dts" cap) as a JSValue string
- * in the compiler context. */
-static JSValue fetch_dts(JSContext *ctx) {
-    static const char NAME[] = "$dts";
+/* Call a reserved, zero-argument host capability and decode its msgpack result
+ * into a JSValue in the compiler context. */
+static JSValue fetch_reserved(JSContext *ctx, const char *name, size_t name_len) {
     Buf ab = {0};
     enc_arr_hdr(&ab, 0);
-    int64_t packed = host_call((int32_t)(intptr_t)NAME, 4,
+    int64_t packed = host_call((int32_t)(intptr_t)name, (int32_t)name_len,
                                (int32_t)(intptr_t)ab.data, (int32_t)ab.len);
     free(ab.data);
     uint32_t rptr = (uint32_t)(packed >> 32);
     uint32_t rlen = (uint32_t)(packed & 0xffffffff);
     Rd r = { (const uint8_t *)(uintptr_t)rptr, 0, rlen };
-    JSValue dts = mp_to_js(ctx, &r);
+    JSValue v = mp_to_js(ctx, &r);
     free((void *)(uintptr_t)rptr);
-    return dts;
+    return v;
+}
+
+/* The SDK .d.ts (reserved "$dts" cap) as a JSValue string. */
+static JSValue fetch_dts(JSContext *ctx) {
+    return fetch_reserved(ctx, "$dts", 4);
+}
+
+/* The host's compile options (reserved "$opts" cap) as a JSValue object — an
+ * open map the driver reads the keys it understands from (`sync_only` today).
+ * Fetched per eval/check, like the .d.ts, so a host can change it between
+ * calls; never during compiler bring-up, which must stay host-call-free for
+ * Wizer. */
+static JSValue fetch_opts(JSContext *ctx) {
+    return fetch_reserved(ctx, "$opts", 5);
 }
 
 /* ------------------------------------------------------------------ */
-/* check entrypoint (optional export — type-check only, nothing runs)  */
+/* static entrypoints (optional exports — analysis only, nothing runs) */
 /* ------------------------------------------------------------------ */
 
-/* `check(ptr, len)`: the argument is a msgpack string (TS source). Returns a
- * msgpack ARRAY of every error diagnostic ({message, type, line?}); an empty
- * array means the source is well-typed against the current SDK. No user
- * context is created and no guest code executes. Ignores @ts-nocheck — an
- * explicit check asks for the diagnostics. */
-__attribute__((export_name("check")))
-int64_t check(int32_t ptr, int32_t len) {
+/* Shared body of `check` and `analyze`: decode the msgpack string argument,
+ * call the named driver function with (source, dts, opts), and pack whatever it
+ * returns. No user context is created and no guest code executes; both ignore
+ * @ts-nocheck, since an explicit static pass asks for the diagnostics. */
+static int64_t run_static(const char *driver_fn, const char *entry,
+                          int32_t ptr, int32_t len) {
     if (ensure_compiler()) {
         return ret_error("failed to start the TypeScript compiler");
     }
@@ -461,18 +560,22 @@ int64_t check(int32_t ptr, int32_t len) {
     JSValue srcv = mp_to_js(g_cctx, &r);
     if (!JS_IsString(srcv)) {
         JS_FreeValue(g_cctx, srcv);
-        return ret_error("check expects a source string");
+        char argbuf[64];
+        snprintf(argbuf, sizeof(argbuf), "%s expects a source string", entry);
+        return ret_error(argbuf);
     }
 
     JSValue g = JS_GetGlobalObject(g_cctx);
-    JSValue fn = JS_GetPropertyStr(g_cctx, g, "__terrariumCheck");
+    JSValue fn = JS_GetPropertyStr(g_cctx, g, driver_fn);
     JS_FreeValue(g_cctx, g);
     JSValue dts = fetch_dts(g_cctx);
-    JSValue args[2] = { srcv, dts };
-    JSValue res = JS_Call(g_cctx, fn, JS_UNDEFINED, 2, args);
+    JSValue opts = fetch_opts(g_cctx);
+    JSValue args[3] = { srcv, dts, opts };
+    JSValue res = JS_Call(g_cctx, fn, JS_UNDEFINED, 3, args);
     JS_FreeValue(g_cctx, fn);
     JS_FreeValue(g_cctx, srcv);
     JS_FreeValue(g_cctx, dts);
+    JS_FreeValue(g_cctx, opts);
 
     int64_t out;
     if (JS_IsException(res)) {
@@ -488,6 +591,26 @@ int64_t check(int32_t ptr, int32_t len) {
     }
     JS_FreeValue(g_cctx, res);
     return out;
+}
+
+/* `check(ptr, len)`: the argument is a msgpack string (TS source). Returns a
+ * msgpack ARRAY of every error diagnostic ({message, type, line?}); an empty
+ * array means the source is well-typed against the current SDK. This shape is
+ * the host's oldest contract and never changes — anything richer is `analyze`. */
+__attribute__((export_name("check")))
+int64_t check(int32_t ptr, int32_t len) {
+    return run_static("__terrariumCheck", "check", ptr, len);
+}
+
+/* `analyze(ptr, len)`: same argument, same analysis, a wider result — a msgpack
+ * MAP { diagnostics: [...], schemas: [...] }. `schemas` is empty unless the host
+ * set the `type_argument_schemas` compile option (reserved "$opts" cap), in
+ * which case each entry is { ordinal, callee, line, schema } where `schema` is
+ * the canonical JSON text derived from that call's single type argument and
+ * `line` is the 1-based line of the call's start in the submitted source. */
+__attribute__((export_name("analyze")))
+int64_t analyze(int32_t ptr, int32_t len) {
+    return run_static("__terrariumAnalyze", "analyze", ptr, len);
 }
 
 /* ------------------------------------------------------------------ */
@@ -524,11 +647,13 @@ int64_t eval(int32_t ptr, int32_t len) {
         JS_FreeValue(g_cctx, g);
         JSValue csrc = JS_NewStringLen(g_cctx, src, slen);
         JSValue dts = fetch_dts(g_cctx);
-        JSValue args[2] = { csrc, dts };
-        JSValue res = JS_Call(g_cctx, fn, JS_UNDEFINED, 2, args);
+        JSValue opts = fetch_opts(g_cctx);
+        JSValue args[3] = { csrc, dts, opts };
+        JSValue res = JS_Call(g_cctx, fn, JS_UNDEFINED, 3, args);
         JS_FreeValue(g_cctx, fn);
         JS_FreeValue(g_cctx, csrc);
         JS_FreeValue(g_cctx, dts);
+        JS_FreeValue(g_cctx, opts);
 
         if (JS_IsException(res)) {
             JSValue exc = JS_GetException(g_cctx);
@@ -590,7 +715,14 @@ int64_t eval(int32_t ptr, int32_t len) {
             out = ret_error_exc(ctx, exc);
             JS_FreeValue(ctx, exc);
         } else {
-            out = ret_value(ctx, ures);
+            /* Same shape as a thrown exception: the $error sentinel, with
+             * whatever was printed first left intact in the host's buffer. */
+            const char *stalled = async_incomplete_reason(rt, ctx, ures);
+            if (stalled) {
+                out = ret_error_full(stalled, ASYNC_INCOMPLETE_TYPE, 0, 0);
+            } else {
+                out = ret_value(ctx, ures);
+            }
         }
         JS_FreeValue(ctx, ures);
     }

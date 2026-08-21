@@ -5,23 +5,28 @@
 #
 # Downloads quickjs-ng sources (not vendored) and compiles them + the shim into
 # tests/wasm/quickjs_guest.wasm. Requires a WASI SDK: https://github.com/WebAssembly/wasi-sdk
+#
+# The quickjs-ng pin, its checksum, and the fetch itself live in
+# ../pinned-sources.sh — a *shared* pin with the TypeScript guest, because that
+# guest embeds the TypeScript compiler as qjsc bytecode and the bytecode format
+# is version-locked (v0.15.1 emitted BC_VERSION 26, v0.16.2 emits 27), so the
+# two must move together. Whichever way the sources arrive (release tarball, or
+# a git clone when a proxy 403s the codeload redirect), the extracted tree is
+# verified against the pinned digest before anything is compiled.
 set -euo pipefail
 
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk}"
-QJS_VERSION="${QJS_VERSION:-v0.15.1}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../pinned-sources.sh
+. "$HERE/../pinned-sources.sh"
 BUILD="$HERE/build"
 QJS="$BUILD/quickjs-${QJS_VERSION}"
 
 CLANG="$WASI_SDK/bin/clang"
 [ -x "$CLANG" ] || { echo "WASI SDK clang not found at $CLANG (set WASI_SDK)"; exit 1; }
 
-if [ ! -d "$QJS" ]; then
-    echo "Fetching quickjs-ng $QJS_VERSION ..."
-    mkdir -p "$QJS"
-    curl -fsSL "https://github.com/quickjs-ng/quickjs/archive/refs/tags/${QJS_VERSION}.tar.gz" \
-        | tar xz -C "$QJS" --strip-components=1
-fi
+mkdir -p "$BUILD"
+fetch_quickjs "$QJS"
 
 echo "Compiling quickjs_guest.wasm ..."
 "$CLANG" \

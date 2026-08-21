@@ -43,7 +43,7 @@ php -d extension=$(pwd)/target/debug/libterrarium.so examples/four_langs.php
 | `src/marshal.rs` | Value marshaling — `PHP zval ↔ MiddleValue ↔ native msgpack`, the wire form carried over linear memory. |
 | `src/handles.rs` | The capability handle table (`int → live zval`): `grant` / `resolve` / `revoke`. |
 | `src/exceptions.rs` | The typed `Terrarium\Exception` classes. |
-| `lib/Terrarium.php` | The public `Terrarium` facade: `register` / `eval` / `check` / `output` / `types` / `grant` / `resolve` / `revoke` / `manifest` / `reset`. |
+| `lib/Terrarium.php` | The public `Terrarium` facade: `register` / `eval` / `check` / `analyze` / `output` / `types` / `grant` / `resolve` / `revoke` / `manifest` / `reset`. |
 | `lib/TypeInference.php` | The inference trait: PHP Reflection + PHPDoc → `.d.ts` / `.pyi` / `.php`. |
 | `lib/PhpDocType.php` | A recursive-descent parser for the PHPDoc/PHPStan type grammar → a neutral type AST (nested `array{…}` shapes, unions, `?T`, `T[]`, …). |
 | `guests/` | The language engines, one directory each — see their READMEs. |

@@ -58,6 +58,28 @@ final class Terrarium
      * keeps engine-internal state such as the TypeScript compiler warm). Guests
      * run each eval in a fresh runtime either way, so guest program globals do
      * not carry across evals in either mode.
+     *
+     * `syncOnly: true` asks a compiling guest to reject asynchronous code
+     * outright. No guest drains a job queue, so an `await` never resumes and a
+     * promise never settles; the TypeScript guest turns that into a compile
+     * error naming the construct, the synchronous alternative, and the source
+     * line. It covers `async`/`await`/`for await`/`function*`/`yield` AND every
+     * use of a promise — constructing one, naming the global, a call whose
+     * return type is one, or a `.then`/`.catch`/`.finally` on one — because a
+     * promise that cannot settle abandons its callbacks in silence. It is a
+     * host constraint rather than an author preference, so it holds even under
+     * `// @ts-nocheck` (where, with no type information to consult, the promise
+     * rules match on shape and are correspondingly conservative). Guests
+     * without a compiler accept the option and ignore it — they fail loudly at
+     * run time instead (see `eval()`).
+     *
+     * `typeArgumentSchemas: ['ctx.model', 'ctx.agent']` asks a compiling guest
+     * to derive a JSON Schema from the single type argument of every call to
+     * those callees, and to return them from `analyze()`. Nothing else changes:
+     * `eval()` and `check()` behave exactly as before, and a call to a listed
+     * callee written WITHOUT a type argument is untouched.
+     *
+     * @param list<string>|null $typeArgumentSchemas
      */
     public function __construct(
         string $path,
@@ -66,6 +88,8 @@ final class Terrarium
         ?int $maxStack = null,
         ?int $fuel = null,
         bool $isolated = false,
+        bool $syncOnly = false,
+        ?array $typeArgumentSchemas = null,
     ) {
         $bytes = @file_get_contents($path);
         if ($bytes === false) {
@@ -79,6 +103,24 @@ final class Terrarium
             fuel: $fuel,
             isolated: $isolated,
         );
+        $options = [];
+        if ($syncOnly) {
+            $options['sync_only'] = true;
+        }
+        if ($typeArgumentSchemas !== null && $typeArgumentSchemas !== []) {
+            // A misspelt option would otherwise extract nothing, in silence.
+            foreach ($typeArgumentSchemas as $callee) {
+                if (!is_string($callee) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/', $callee)) {
+                    throw new \InvalidArgumentException(
+                        'invalid typeArgumentSchemas entry: every callee must be a dotted identifier chain, e.g. "ctx.model"'
+                    );
+                }
+            }
+            $options['type_argument_schemas'] = array_values($typeArgumentSchemas);
+        }
+        if ($options !== []) {
+            $this->rt->setCompileOptions($options);
+        }
     }
 
     /**
@@ -125,6 +167,19 @@ final class Terrarium
      *
      * Anything the guest writes with `console.log` (JS) or `print` (Python) is
      * captured; read it with `output()` after the call.
+     *
+     * A program that cannot finish because it is asynchronous fails loudly
+     * rather than half-running: on the QuickJS-based guests (JavaScript,
+     * TypeScript) an eval that yields a Promise, leaves callbacks queued, or
+     * registered any promise reaction raises a TerrariumGuestException of type
+     * `AsyncIncomplete` — there is no event loop to resume it. Output printed
+     * before that point is preserved, as with any other guest error.
+     *
+     * One case escapes it, documented rather than papered over: `await` does
+     * not go through `Promise.prototype.then`, so a fire-and-forget async
+     * function suspended on a promise that never settles is invisible to the
+     * engine's public API. `syncOnly: true` (TypeScript) rejects that at
+     * compile time; see docs/errors.md.
      */
     public function eval(string $source): mixed
     {
@@ -143,11 +198,61 @@ final class Terrarium
      * guests report syntax/compile errors (`[]` means "compiles", not
      * "correct" — their type story stays in the editor via `types()`).
      *
+     * With `syncOnly: true`, the TypeScript guest also lists EVERY async,
+     * generator or promise construct as a `TSSyncOnly` diagnostic, ahead of the
+     * type diagnostics and regardless of `@ts-nocheck`.
+     *
+     * Always on, with no option to set: the TypeScript guest reports syntax the
+     * sandbox ENGINE cannot parse — `accessor` class members today — as
+     * `TSEngineUnsupported`. The checker accepts those, so without this a clean
+     * `check()` would not mean "this will run".
+     *
      * @return list<array{message: string, type?: string, line?: int}>
      */
     public function check(string $source): array
     {
         return $this->rt->check($source);
+    }
+
+    /**
+     * The same static pass as `check()`, with everything the guest was asked to
+     * extract alongside the diagnostics:
+     *
+     *     ['diagnostics' => [...], 'schemas' => [...]]
+     *
+     * `diagnostics` is byte-for-byte what `check()` returns. `schemas` is empty
+     * unless the guest was constructed with `typeArgumentSchemas:`, in which
+     * case the TypeScript guest returns one entry per matched call:
+     *
+     *     ['ordinal' => 0, 'callee' => 'ctx.agent', 'line' => 1, 'schema' => '{"type":"object",…}']
+     *
+     * `schema` is canonical JSON TEXT — fixed key order, no whitespace — so the
+     * same source always yields byte-identical bytes to bake, store, or hash.
+     * `ordinal` is the call's 0-based index among matched calls in source order,
+     * and is the ONLY identity offered: a line:column would move every time the
+     * file is reformatted, while the ordinal survives renaming, rewrapping and
+     * commenting. A matched call whose type argument has no JSON Schema form
+     * still consumes its ordinal — it appears in `diagnostics` as a
+     * `TSSchemaError` carrying that ordinal — so one bad call cannot renumber
+     * the others.
+     *
+     * `line` is not a second identity but a runtime bridge: the 1-based line of
+     * the CALL's start (the same convention the diagnostics use), carried beside
+     * `schema` and never inside it, for consumers whose compiled artifact is
+     * immutable per version and must therefore key their baked schemas by line.
+     * Entries are sorted by start position, so `line` is non-decreasing and two
+     * matched calls on one line share it.
+     *
+     * Nothing executes, exactly as with `check()`.
+     *
+     * @return array{
+     *     diagnostics: list<array{message: string, type?: string, line?: int, ordinal?: int}>,
+     *     schemas: list<array{ordinal: int, callee: string, line: int, schema: string}>
+     * }
+     */
+    public function analyze(string $source): array
+    {
+        return $this->rt->analyze($source);
     }
 
     /**

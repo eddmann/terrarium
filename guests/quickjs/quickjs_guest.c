@@ -13,6 +13,12 @@
  * QuickJS runs *inside* the wasm sandbox, so an engine memory-corruption bug
  * cannot reach the host — an isolation guarantee native embedding cannot give.
  *
+ * There is no event loop: the job queue is never drained, so a program that
+ * suspends can never finish. Rather than half-run it in silence, an eval that
+ * yields a Promise, leaves jobs queued, or registered any promise reaction
+ * comes back as the $error sentinel typed `AsyncIncomplete` (see
+ * async_incomplete_reason below).
+ *
  * Built with the WASI SDK in reactor mode; see build.sh.
  */
 #include <stdint.h>
@@ -241,6 +247,22 @@ static const char PRELUDE[] =
     "  var fmt = function(x){ return (typeof x === 'object' && x !== null) ? JSON.stringify(x) : String(x); };"
     "  var emit = function(){ __host('$out', Array.prototype.slice.call(arguments).map(fmt).join(' ')); };"
     "  return { log: emit, error: emit, warn: emit, info: emit, debug: emit };"
+    "})();"
+    /* Promise-reaction counter -- the JS half of async_incomplete_reason().
+     * The public QuickJS C API cannot enumerate a *pending* promise's
+     * reactions (JS_IsJobPending only sees jobs, and a reaction on a promise
+     * that never settles never becomes one), so count them here instead,
+     * before user code can register any. `catch` and `finally` are specified
+     * in terms of `then`, and quickjs-ng implements them that way, so this one
+     * wrapper also covers Promise.all/race/any/allSettled. The property is
+     * non-writable and non-configurable: tampering with it can only ever LOSE
+     * a detection, never invent one. */
+    "(function(){"
+    "  var n = 0, proto = Promise.prototype, base = proto.then;"
+    "  Object.defineProperty(proto, 'then', {"
+    "    value: function(a, b){ n++; return base.call(this, a, b); },"
+    "    writable: true, configurable: true });"
+    "  Object.defineProperty(globalThis, '__terrariumReactions', { value: function(){ return n; } });"
     "})();";
 
 /* ------------------------------------------------------------------ */
@@ -316,6 +338,97 @@ static int64_t ret_error_exc(JSContext *ctx, JSValueConst exc) {
     JS_FreeValue(ctx, jstack);
     return out;
 }
+
+/* ------------------------------------------------------------------ */
+/* asynchronous programs cannot complete here                          */
+/* ------------------------------------------------------------------ */
+
+/* There is no event loop in the sandbox: nothing ever calls
+ * JS_ExecutePendingJob, so the job (microtask) queue is never drained. A
+ * program that suspends therefore never resumes — an `await` continuation, a
+ * `.then` callback, a queued rejection handler: all dead code. Left undetected
+ * that half-runs *silently*, which is the worst possible failure for generated
+ * code: `(async () => { const x = f(); g(x); })()` prints nothing, returns a
+ * pending promise, and looks like it ran.
+ *
+ * So after the eval, before marshaling a result, ask three questions:
+ *
+ *   - is the value a Promise? — JS_IsPromise, regardless of state. Even an
+ *     already-fulfilled one is a failure: `.then` callbacks are queued, not
+ *     called, so a "resolved" chain's continuations still never ran, and the
+ *     host would otherwise marshal an opaque `{}` as the result.
+ *   - are jobs queued? — JS_IsJobPending on the runtime, which catches the
+ *     program that returned a plain value but left work behind it.
+ *   - was any promise reaction registered? — the prelude's counter.
+ *
+ * The third exists because the first two together still missed a whole class:
+ *
+ *     const p = new Promise(() => {});
+ *     p.then(() => mark());
+ *     42
+ *
+ * The result is 42 (not a promise), and NO job is queued — a reaction on a
+ * PENDING promise is stored on the promise, and only becomes a job when it
+ * settles, which this one never does. So both checks passed, `eval` returned
+ * 42, and `mark()` was abandoned in silence: exactly the failure this guard
+ * was written to eliminate.
+ *
+ * The public QuickJS C API cannot see that: there is no way to enumerate a
+ * pending promise's reactions. But the JS side can count them, and the count is
+ * a SOUND verdict on its own — under a queue that is never drained, a reaction
+ * registered on a settled promise becomes a job that never runs (already caught
+ * above) and a reaction registered on a pending promise never becomes anything
+ * at all. Either way the callback provably did not run, so *any* reaction
+ * registered during an eval is abandoned work. No fully-settled chain is
+ * wrongly failed, because there is no such thing here as a chain that ran.
+ *
+ * KNOWN RESIDUAL GAP, deliberately not papered over: `await` does not go
+ * through `Promise.prototype.then` (the engine uses the internal
+ * perform-promise-then), so a fire-and-forget async function suspended on a
+ * promise that never settles — `(async () => { await never; mark(); })(); 42` —
+ * is still invisible to all three checks. The TypeScript guest's `sync_only`
+ * option rejects that at compile time; here it remains undetectable with the
+ * engine's public API. Documented in the README rather than pretended away.
+ *
+ * Returns the reason to report, or NULL when the program really did finish.
+ * The type is the stable sentinel `AsyncIncomplete`. */
+static int async_reactions(JSContext *ctx) {
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, g, "__terrariumReactions");
+    JS_FreeValue(ctx, g);
+    int n = 0;
+    if (JS_IsFunction(ctx, fn)) {
+        JSValue v = JS_Call(ctx, fn, JS_UNDEFINED, 0, NULL);
+        int32_t got = 0;
+        if (!JS_IsException(v) && JS_ToInt32(ctx, &got, v) == 0 && got > 0) n = (int)got;
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, fn);
+    return n;
+}
+
+static const char *async_incomplete_reason(JSRuntime *rt, JSContext *ctx, JSValueConst v) {
+    if (JS_IsPromise(v)) {
+        return "asynchronous guest code cannot complete: the program evaluated to a Promise, and "
+               "the job queue is never drained here, so its continuation never ran. Write "
+               "synchronous code — host capabilities return their values directly.";
+    }
+    if (JS_IsJobPending(rt)) {
+        return "asynchronous guest code cannot complete: the program left queued jobs (a promise "
+               "callback or an async continuation), and the job queue is never drained here, so "
+               "they never ran. Write synchronous code — host capabilities return their values "
+               "directly.";
+    }
+    if (async_reactions(ctx) > 0) {
+        return "asynchronous guest code cannot complete: the program registered a promise reaction "
+               "(`.then` / `.catch` / `.finally`), and the job queue is never drained here, so the "
+               "callback never ran — the promise it is waiting on can never settle. Write "
+               "synchronous code — host capabilities return their values directly.";
+    }
+    return NULL;
+}
+
+#define ASYNC_INCOMPLETE_TYPE "AsyncIncomplete"
 
 /* Encode a msgpack diagnostics array: `[]`, or `[ {message, type?, line?} ]`. */
 static int64_t ret_diags(const char *msg, const char *type, int has_line, int64_t line) {
@@ -428,7 +541,14 @@ int64_t eval(int32_t ptr, int32_t len) {
             out = ret_error_exc(ctx, exc);
             JS_FreeValue(ctx, exc);
         } else {
-            out = ret_value(ctx, res);
+            /* Same shape as a thrown exception: the $error sentinel, with
+             * whatever was printed first left intact in the host's buffer. */
+            const char *stalled = async_incomplete_reason(rt, ctx, res);
+            if (stalled) {
+                out = ret_error_full(stalled, ASYNC_INCOMPLETE_TYPE, 0, 0);
+            } else {
+                out = ret_value(ctx, res);
+            }
         }
         JS_FreeValue(ctx, res);
         JS_FreeCString(ctx, src);
