@@ -6,8 +6,12 @@
  *
  * Exposes one function, called from C per eval:
  *
- *   __terrariumCompile(source, sdkDts) -> { js: string }
- *                                       | { error: { message, type, line? } }
+ *   __terrariumCompile(source, sdkDts, options) -> { js: string }
+ *                                                | { error: { message, type, line? } }
+ *
+ * `options` is the host's per-instance compile-options object (the reserved
+ * "$opts" capability), or undefined for a host that sends none. It is an extra
+ * trailing argument, so nothing breaks if it is absent.
  *
  * Behaviour:
  *  - Type-checks `source` against [libs, sdkDts] (strict). The SDK .d.ts is the
@@ -15,6 +19,8 @@
  *    environment is exactly the capability environment.
  *  - A leading `// @ts-nocheck` comment (TypeScript's own pragma) skips the
  *    check; the source is still stripped and run.
+ *  - With `options.sync_only`, asynchronous and generator syntax is rejected
+ *    outright (see SYNC_ONLY below) — regardless of `@ts-nocheck`.
  *  - Types are erased with ts-blank-space (whitespace-preserving), so the
  *    returned JS is positionally identical to the input — runtime error line
  *    numbers stay exact. Non-erasable syntax (enum, namespace, ...) is a clear
@@ -118,11 +124,126 @@
         return errors;
     }
 
+    // ---------------------------------------------------------------------
+    // SYNC_ONLY: the host has no event loop
+    // ---------------------------------------------------------------------
+    //
+    // The guest never drains the microtask/job queue: whatever an `await`
+    // suspends on, or a generator suspends into, is simply never resumed. Left
+    // alone that half-runs silently -- an async IIFE returns a pending promise
+    // and its continuation is dead code. When the host sets `sync_only`, that
+    // syntax is rejected at compile time instead, with a message that teaches
+    // the synchronous shape rather than just naming the ban.
+    //
+    // Deliberate asymmetry with `@ts-nocheck`: the pragma opts out of the TYPE
+    // check, which is an author's preference about their own annotations.
+    // sync-only is not a preference -- it is a capability the host does not
+    // have -- so the walk runs whether or not the pragma is present. A guest
+    // that could not finish the program is worse than one that refuses it.
+    //
+    // A dedicated `forEachChild` walk over the source's own SourceFile, not the
+    // checker: this needs syntax only, so it costs one parse instead of a
+    // Program, and it stays available on the `@ts-nocheck` path where no
+    // Program is built at all.
+    var SYNC_ONLY_TYPE = "TSSyncOnly";
+    var SYNC_ONLY_MESSAGES = {
+        async:
+            "`async` functions are not supported: this environment is synchronous and never runs " +
+            "continuations, so everything after the first `await` would silently never execute. " +
+            "Write a plain function -- SDK calls return their values directly.",
+        await:
+            "`await` is not supported: this environment is synchronous; SDK calls return values " +
+            "directly -- remove `await` and use the returned value.",
+        forAwait:
+            "`for await` is not supported: this environment is synchronous; iterate the returned " +
+            "array with a plain `for ... of`.",
+        generator:
+            "generator functions (`function*`) are not supported: this environment runs a program " +
+            "to completion in one go and never resumes a suspended one. Build an array and return it.",
+        yield:
+            "`yield` is not supported: this environment runs a program to completion in one go and " +
+            "never resumes a suspended one. Collect the values into an array and return it.",
+    };
+
+    // Every async/generator construct in `source`, as {message, type, line},
+    // in source order. Empty when the source is already synchronous.
+    function syncOnlyErrors(source) {
+        var file = ts.createSourceFile("/main.ts", source, ts.ScriptTarget.ES2020, true);
+        var found = [];
+
+        function report(kind, pos) {
+            found.push({ pos: pos, kind: kind });
+        }
+
+        function visit(node) {
+            var kind = node.kind;
+            if (kind === ts.SyntaxKind.AwaitExpression) {
+                report("await", node.getStart(file));
+            } else if (kind === ts.SyntaxKind.YieldExpression) {
+                report("yield", node.getStart(file));
+            } else if (kind === ts.SyntaxKind.ForOfStatement && node.awaitModifier) {
+                report("forAwait", node.getStart(file));
+            }
+            // `function*` / `*method()` in every form that can carry the token.
+            if (
+                node.asteriskToken &&
+                (kind === ts.SyntaxKind.FunctionDeclaration ||
+                    kind === ts.SyntaxKind.FunctionExpression ||
+                    kind === ts.SyntaxKind.MethodDeclaration)
+            ) {
+                report("generator", node.asteriskToken.getStart(file));
+            }
+            // The `async` modifier on any function form: declaration,
+            // expression, arrow, class method, object-literal method.
+            var mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
+            if (mods) {
+                for (var i = 0; i < mods.length; i++) {
+                    if (mods[i].kind === ts.SyntaxKind.AsyncKeyword) {
+                        report("async", mods[i].getStart(file));
+                    }
+                }
+            }
+            ts.forEachChild(node, visit);
+        }
+        ts.forEachChild(file, visit);
+
+        found.sort(function (a, b) { return a.pos - b.pos; });
+        var errors = [];
+        for (var j = 0; j < found.length; j++) {
+            errors.push({
+                message: SYNC_ONLY_MESSAGES[found[j].kind],
+                type: SYNC_ONLY_TYPE,
+                line: file.getLineAndCharacterOfPosition(found[j].pos).line + 1,
+            });
+        }
+        return errors;
+    }
+
+    function syncOnlyRequested(options) {
+        return !!(options && options.sync_only);
+    }
+
+    // eval reports one error (execution is gated on the first) but says how
+    // many more there are; `check()` is where the full list lives.
+    function firstOf(errors) {
+        var first = errors[0];
+        var out = { message: first.message, type: first.type };
+        if (typeof first.line === "number") out.line = first.line;
+        if (errors.length > 1) {
+            out.message += " [+" + (errors.length - 1) + " more error" + (errors.length > 2 ? "s" : "") + "]";
+        }
+        return out;
+    }
+
     // Check-only entrypoint: every diagnostic, nothing executed. An explicit
     // check ignores @ts-nocheck -- you asked for the diagnostics. tsc itself
     // honours the pragma inside the checker, so blank it out of the leading
     // comments first (same-length replacement: positions are preserved).
-    globalThis.__terrariumCheck = function (source, sdkDts) {
+    globalThis.__terrariumCheck = function (source, sdkDts, options) {
+        // Host constraints first, and every occurrence of them: they are the
+        // reason the program cannot run at all.
+        var errors = syncOnlyRequested(options) ? syncOnlyErrors(source) : [];
+
         var ranges = ts.getLeadingCommentRanges(source, 0) || [];
         for (var i = 0; i < ranges.length; i++) {
             var idx;
@@ -130,10 +251,10 @@
                 source = source.slice(0, idx) + "           " + source.slice(idx + 11);
             }
         }
-        return runCheck(source, sdkDts);
+        return errors.concat(runCheck(source, sdkDts));
     };
 
-    globalThis.__terrariumCompile = function (source, sdkDts) {
+    globalThis.__terrariumCompile = function (source, sdkDts, options) {
         // TypeScript's own opt-out pragma, honoured only in leading comments.
         var noCheck = false;
         var ranges = ts.getLeadingCommentRanges(source, 0) || [];
@@ -144,17 +265,16 @@
             }
         }
 
+        // sync-only is a host capability constraint, not an author preference:
+        // it is enforced ahead of the type check and *through* @ts-nocheck.
+        if (syncOnlyRequested(options)) {
+            var syncErrors = syncOnlyErrors(source);
+            if (syncErrors.length > 0) return { error: firstOf(syncErrors) };
+        }
+
         if (!noCheck) {
             var errors = runCheck(source, sdkDts);
-            if (errors.length > 0) {
-                var first = errors[0];
-                var out = { message: first.message, type: first.type };
-                if (typeof first.line === "number") out.line = first.line;
-                if (errors.length > 1) {
-                    out.message += " [+" + (errors.length - 1) + " more error" + (errors.length > 2 ? "s" : "") + "]";
-                }
-                return { error: out };
-            }
+            if (errors.length > 0) return { error: firstOf(errors) };
         }
 
         // Erase types, whitespace-preserving. Unsupported (non-erasable) syntax

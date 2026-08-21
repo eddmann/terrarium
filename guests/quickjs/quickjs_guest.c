@@ -13,6 +13,11 @@
  * QuickJS runs *inside* the wasm sandbox, so an engine memory-corruption bug
  * cannot reach the host — an isolation guarantee native embedding cannot give.
  *
+ * There is no event loop: the job queue is never drained, so a program that
+ * suspends can never finish. Rather than half-run it in silence, an eval that
+ * yields a Promise or leaves jobs queued comes back as the $error sentinel
+ * typed `AsyncIncomplete` (see async_incomplete_reason below).
+ *
  * Built with the WASI SDK in reactor mode; see build.sh.
  */
 #include <stdint.h>
@@ -317,6 +322,46 @@ static int64_t ret_error_exc(JSContext *ctx, JSValueConst exc) {
     return out;
 }
 
+/* ------------------------------------------------------------------ */
+/* asynchronous programs cannot complete here                          */
+/* ------------------------------------------------------------------ */
+
+/* There is no event loop in the sandbox: nothing ever calls
+ * JS_ExecutePendingJob, so the job (microtask) queue is never drained. A
+ * program that suspends therefore never resumes — an `await` continuation, a
+ * `.then` callback, a queued rejection handler: all dead code. Left undetected
+ * that half-runs *silently*, which is the worst possible failure for generated
+ * code: `(async () => { const x = f(); g(x); })()` prints nothing, returns a
+ * pending promise, and looks like it ran.
+ *
+ * So after the eval, before marshaling a result, ask the runtime two questions:
+ *
+ *   - is the value a Promise? — JS_IsPromise, regardless of state. Even an
+ *     already-fulfilled one is a failure: `.then` callbacks are queued, not
+ *     called, so a "resolved" chain's continuations still never ran, and the
+ *     host would otherwise marshal an opaque `{}` as the result.
+ *   - are jobs queued? — JS_IsJobPending on the runtime, which catches the
+ *     program that returned a plain value but left work behind it.
+ *
+ * Returns the reason to report, or NULL when the program really did finish.
+ * The type is the stable sentinel `AsyncIncomplete`. */
+static const char *async_incomplete_reason(JSRuntime *rt, JSValueConst v) {
+    if (JS_IsPromise(v)) {
+        return "asynchronous guest code cannot complete: the program evaluated to a Promise, and "
+               "the job queue is never drained here, so its continuation never ran. Write "
+               "synchronous code — host capabilities return their values directly.";
+    }
+    if (JS_IsJobPending(rt)) {
+        return "asynchronous guest code cannot complete: the program left queued jobs (a promise "
+               "callback or an async continuation), and the job queue is never drained here, so "
+               "they never ran. Write synchronous code — host capabilities return their values "
+               "directly.";
+    }
+    return NULL;
+}
+
+#define ASYNC_INCOMPLETE_TYPE "AsyncIncomplete"
+
 /* Encode a msgpack diagnostics array: `[]`, or `[ {message, type?, line?} ]`. */
 static int64_t ret_diags(const char *msg, const char *type, int has_line, int64_t line) {
     Buf b = {0};
@@ -428,7 +473,14 @@ int64_t eval(int32_t ptr, int32_t len) {
             out = ret_error_exc(ctx, exc);
             JS_FreeValue(ctx, exc);
         } else {
-            out = ret_value(ctx, res);
+            /* Same shape as a thrown exception: the $error sentinel, with
+             * whatever was printed first left intact in the host's buffer. */
+            const char *stalled = async_incomplete_reason(rt, res);
+            if (stalled) {
+                out = ret_error_full(stalled, ASYNC_INCOMPLETE_TYPE, 0, 0);
+            } else {
+                out = ret_value(ctx, res);
+            }
         }
         JS_FreeValue(ctx, res);
         JS_FreeCString(ctx, src);

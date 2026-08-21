@@ -70,6 +70,43 @@ whitespace-preserving, so runtime error lines match the TS you submitted, and th
 JS runs in the user context. `check()` runs the full type-check and returns *every*
 diagnostic as data.
 
+## Asynchrony: refused up front, and caught at run time
+
+The sandbox has no event loop — nothing drains the job queue, so a program that
+suspends never resumes. This guest closes that from both ends.
+
+**`sync_only`, opt-in, compile time.** The host's compile options arrive per
+eval/check through the reserved **`$opts`** capability (the same shape as
+`$dts`), as an open map the driver reads the keys it understands from. With
+`sync_only`, `driver.js` walks the parsed `/main.ts` with `forEachChild` — syntax
+only, so it costs one parse rather than a `Program` — and reports every:
+
+| Construct | Detected as |
+|---|---|
+| `async` function / expression / arrow / class method / object-literal method | an `AsyncKeyword` in the node's modifiers |
+| `await`, including top-level `await` | `AwaitExpression` |
+| `for await (… of …)` | `ForOfStatement` with an `awaitModifier` |
+| `function*`, `*method()` | an `asteriskToken` on a function/method node |
+| `yield` | `YieldExpression` |
+
+Each becomes a **`TSSyncOnly`** diagnostic with the source line and a message
+that names the synchronous alternative. Because it is an AST walk, prose is
+safe — `"we await your reply"` in a string, a comment about async pipelines, a
+property named `async` — which a text-level `\b(async|await)\b` ban is not.
+
+**The pragma asymmetry is deliberate:** `// @ts-nocheck` skips the *type* check,
+which is an author's preference about their own annotations; `sync_only` is a
+capability the host does not have, so the walk runs regardless of the pragma.
+`eval` gates on the first violation (counting the rest, like type errors);
+`check()` returns them all, ahead of the type diagnostics.
+
+**`AsyncIncomplete`, always on, run time.** Independently of the option, an eval
+that yields a `Promise` (in any state) or leaves jobs queued comes back as the
+`$error` sentinel typed `AsyncIncomplete` — see the
+[QuickJS guest](../quickjs/README.md#no-event-loop-asynchronous-code-fails-loudly),
+which uses the identical check. That covers what the option cannot: `@ts-nocheck`
+source, or a promise chain built without `async`/`await` at all.
+
 ## Wizer pre-initialization
 
 The ~500 ms a cold compiler context otherwise pays — `ts.createProgram` parsing

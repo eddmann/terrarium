@@ -357,9 +357,13 @@ what a fix-up loop needs.
 All of this reuses the *one* `host_call` import and the *one* `eval` return
 path — `$out` is a reserved name, `$error` is a reserved result shape, `$names`
 is queried once at startup to learn which top-level globals to install (there is
-no synthetic root), and `$dts` serves the SDK's generated `.d.ts` to the
-type-aware TypeScript guest. No new wasm import, no ABI change; the guest stays
-dumb and all policy lives host-side.
+no synthetic root), `$dts` serves the SDK's generated `.d.ts` to the type-aware
+TypeScript guest, and `$opts` serves the host's **compile options** — an open
+map a compiling guest consults before accepting a program (today `sync_only`,
+which the TypeScript guest enforces as a ban on async/generator syntax; see
+[api](api.md#synchronous-only-guests)). Adding an option therefore costs no new
+wasm import and no ABI change: a guest reads the keys it knows and ignores the
+rest. The guest stays dumb and all policy lives host-side.
 
 ---
 

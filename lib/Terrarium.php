@@ -58,6 +58,14 @@ final class Terrarium
      * keeps engine-internal state such as the TypeScript compiler warm). Guests
      * run each eval in a fresh runtime either way, so guest program globals do
      * not carry across evals in either mode.
+     *
+     * `syncOnly: true` asks a compiling guest to reject asynchronous and
+     * generator syntax outright. No guest drains a job queue, so an `await`
+     * never resumes; the TypeScript guest turns that into a compile error that
+     * names the construct and the synchronous alternative, at the source line.
+     * It is a host constraint rather than an author preference, so it holds
+     * even under `// @ts-nocheck`. Guests without a compiler accept the option
+     * and ignore it — they fail loudly at run time instead (see `eval()`).
      */
     public function __construct(
         string $path,
@@ -66,6 +74,7 @@ final class Terrarium
         ?int $maxStack = null,
         ?int $fuel = null,
         bool $isolated = false,
+        bool $syncOnly = false,
     ) {
         $bytes = @file_get_contents($path);
         if ($bytes === false) {
@@ -79,6 +88,9 @@ final class Terrarium
             fuel: $fuel,
             isolated: $isolated,
         );
+        if ($syncOnly) {
+            $this->rt->setCompileOptions(['sync_only' => true]);
+        }
     }
 
     /**
@@ -125,6 +137,13 @@ final class Terrarium
      *
      * Anything the guest writes with `console.log` (JS) or `print` (Python) is
      * captured; read it with `output()` after the call.
+     *
+     * A program that cannot finish because it is asynchronous fails loudly
+     * rather than half-running: on the QuickJS-based guests (JavaScript,
+     * TypeScript) an eval that yields a Promise, or that leaves callbacks
+     * queued, raises a TerrariumGuestException of type `AsyncIncomplete` —
+     * there is no event loop to resume it. Output printed before that point is
+     * preserved, as with any other guest error.
      */
     public function eval(string $source): mixed
     {
@@ -142,6 +161,10 @@ final class Terrarium
      * an explicit check asks for the diagnostics); the JS, Python, and PHP
      * guests report syntax/compile errors (`[]` means "compiles", not
      * "correct" — their type story stays in the editor via `types()`).
+     *
+     * With `syncOnly: true`, the TypeScript guest also lists EVERY async or
+     * generator construct as a `TSSyncOnly` diagnostic, ahead of the type
+     * diagnostics and regardless of `@ts-nocheck`.
      *
      * @return list<array{message: string, type?: string, line?: int}>
      */

@@ -139,6 +139,145 @@ check('nothing executes and output() is untouched', function () use ($wasm) {
     eq('from eval', $ts->output());   // check didn't clear or add output
 });
 
+// Nothing drains the job queue, so a suspended program never resumes. Two
+// independent defences: `syncOnly` refuses the syntax at compile time, and the
+// runtime AsyncIncomplete check (always on) catches whatever still gets there.
+echo "\nasync without sync-only: it compiles, then fails loudly at run time\n";
+check('async source still compiles (no option set)', function () use ($wasm) {
+    $ts = new Terrarium($wasm);
+    eq([], $ts->check('const f = async (): Promise<number> => 1;'));
+});
+check('...but the eval is AsyncIncomplete, not a silent half-run', function () use ($wasm) {
+    $ts = new Terrarium($wasm);
+    $reached = false;
+    $ts->register('mark', function () use (&$reached) { $reached = true; });
+    try {
+        $ts->eval('(async () => { console.log("before"); await 1; mark(); })()');
+        throw new RuntimeException('expected an AsyncIncomplete rejection');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'AsyncIncomplete');
+        contains($e->getMessage(), 'job queue is never drained');
+    }
+    eq(false, $reached);              // the continuation never ran
+    eq('before', $ts->output());      // what it printed first survives
+});
+check('a returned promise is AsyncIncomplete even when resolved', function () use ($wasm) {
+    $ts = new Terrarium($wasm);
+    throws(GuestException::class, fn () => $ts->eval('Promise.resolve(1)'));
+});
+
+echo "\nsyncOnly: async and generator syntax is rejected at compile time\n";
+$rejects = function (string $label, string $source, int $line) use ($wasm) {
+    check($label, function () use ($wasm, $source, $line) {
+        $ts = new Terrarium($wasm, syncOnly: true);
+        try {
+            $ts->eval($source);
+            throw new RuntimeException('expected a TSSyncOnly rejection');
+        } catch (GuestException $e) {
+            contains($e->getMessage(), 'TSSyncOnly');
+            contains($e->getMessage(), "(line $line)");
+        }
+    });
+};
+$rejects('async function declaration', "const a = 1;\nasync function f() { return a; }\nf();", 2);
+$rejects('async function expression', "const f = async function () { return 1; };\nf();", 1);
+$rejects('async arrow', "const f = async () => 1;\nf();", 1);
+$rejects('async class method', "class C {\n  async m() { return 1; }\n}\nnew C();", 2);
+$rejects('async object-literal method', "const o = {\n  async m() { return 1; },\n};\no;", 2);
+$rejects('top-level await', "const p = Promise.resolve(1);\nconst v = await p;\nv;", 2);
+$rejects('for await', "async function f(xs: number[]) {\n  for await (const x of xs) { console.log(x); }\n}\nf([]);", 1);
+$rejects('generator declaration', "function* g() { return 1; }\ng();", 1);
+$rejects('generator expression', "const g = function* () { return 1; };\ng();", 1);
+$rejects('generator method', "class C {\n  *m() { return 1; }\n}\nnew C();", 2);
+$rejects('yield', "function* g() {\n  yield 1;\n}\ng();", 1);
+check('await inside an async function is reported in its own right', function () use ($wasm) {
+    // eval gates on the first (the `async` modifier); check() shows both.
+    $ts = new Terrarium($wasm, syncOnly: true);
+    $diags = $ts->check("async function f() {\n  return await Promise.resolve(1);\n}\n");
+    eq(2, count($diags));
+    eq(2, $diags[1]['line']);
+    contains($diags[1]['message'], '`await` is not supported');
+});
+
+echo "\nsyncOnly is a compiler check, not a regex over the text\n";
+check("the prose 'we await your reply' in a string is NOT rejected", function () use ($wasm) {
+    // The false positive this exists to kill: a source-text `\b(async|await)\b`
+    // ban rejects ordinary English. The AST does not.
+    $ts = new Terrarium($wasm, syncOnly: true);
+    eq('we await your reply', $ts->eval('const reply: string = "we await your reply";
+reply'));
+});
+check('identifiers and properties merely NAMED async/await are fine', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    eq(3, $ts->eval("// an async pipeline is discussed, never used\nconst awaited: number = 1;\nconst o = { async: 2 };\nawaited + o.async"));
+});
+check('ordinary synchronous code is unaffected', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    $ts->register('user.fetch', /** @return array{name: string} */ fn (int $id): array => ['name' => 'Ada']);
+    eq('Ada', $ts->eval('user.fetch(1).name'));
+    eq([], $ts->check('const n: number = user.fetch(1).name.length;'));
+});
+check('@ts-nocheck does NOT skip sync-only (a host constraint, not a preference)', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    // The pragma disables the type check; the sync-only walk still runs.
+    try {
+        $ts->eval("// @ts-nocheck\nconst n: string = 1;\nasync function f() { return n; }\nf();");
+        throw new RuntimeException('expected a TSSyncOnly rejection');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'TSSyncOnly');
+        contains($e->getMessage(), '(line 3)');
+    }
+});
+check('the message teaches the synchronous shape', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    try {
+        $ts->eval("const p = Promise.resolve(1);\nawait p;");
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'this environment is synchronous');
+        contains($e->getMessage(), 'return values directly');
+    }
+});
+check('check() lists EVERY occurrence, with lines', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    $diags = $ts->check("async function a() { return 1; }\nasync function b() { return 2; }\nfunction* c() { return 3; }\n");
+    eq(3, count($diags));
+    foreach ($diags as $i => $d) {
+        eq('TSSyncOnly', $d['type']);
+        eq($i + 1, $d['line']);
+    }
+});
+check('eval reports the first and counts the rest', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    try {
+        $ts->eval("async function a() { return 1; }\nasync function b() { return 2; }\na(); b();");
+    } catch (GuestException $e) {
+        contains($e->getMessage(), '(line 1)');
+        contains($e->getMessage(), '[+1 more error]');
+    }
+});
+check('sync-only diagnostics come before the type diagnostics', function () use ($wasm) {
+    $ts = new Terrarium($wasm, syncOnly: true);
+    $diags = $ts->check("async function a() { return 1; }\nconst n: string = 1;\n");
+    eq('TSSyncOnly', $diags[0]['type']);
+    eq('TS2322', $diags[count($diags) - 1]['type']);
+});
+check('the option is per-instance: the default guest still accepts async', function () use ($wasm) {
+    $plain = new Terrarium($wasm);
+    eq([], $plain->check('async function f() { return 1; }'));
+    $strict = new Terrarium($wasm, syncOnly: true);
+    eq(1, count($strict->check('async function f() { return 1; }')));
+});
+check('the raw engine takes it as an open option map (setCompileOptions)', function () use ($wasm) {
+    // The facade's `syncOnly:` is sugar over this; the option map itself is
+    // general — a guest reads the keys it knows and ignores the rest.
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    eq([], $rt->check('async function f() { return 1; }'));
+    $rt->setCompileOptions(['sync_only' => true, 'not_an_option_here' => 'ignored']);
+    eq(1, count($rt->check('async function f() { return 1; }')));
+    $rt->setCompileOptions([]);          // cleared again
+    eq([], $rt->check('async function f() { return 1; }'));
+});
+
 echo "\nchannels\n";
 check('console.log is captured as output()', function () use ($wasm) {
     $ts = new Terrarium($wasm);

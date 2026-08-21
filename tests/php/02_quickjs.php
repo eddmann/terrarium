@@ -63,6 +63,63 @@ check('a syntax error carries type and line', function () use ($wasm) {
     eq(2, $diags[0]['line']);
 });
 
+// There is no event loop in the sandbox: nothing drains the job queue, so a
+// suspended program never resumes. That must FAIL LOUDLY rather than half-run —
+// an async IIFE that silently returns a pending promise is the worst outcome
+// for generated code. On by default; no option to set.
+echo "\nasynchronous code cannot complete (the job queue is never drained)\n";
+check('a pending promise -> AsyncIncomplete', function () use ($wasm) {
+    $j = new Terrarium($wasm);
+    try {
+        $j->eval('new Promise(() => {})');
+        throw new RuntimeException('expected an AsyncIncomplete rejection');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'AsyncIncomplete');
+        contains($e->getMessage(), 'job queue is never drained');
+    }
+});
+check('an ALREADY-RESOLVED promise is also AsyncIncomplete (continuations never ran)', function () use ($wasm) {
+    $j = new Terrarium($wasm);
+    // `.then` callbacks are queued, not called: "resolved" is not "finished".
+    throws(GuestException::class, fn () => $j->eval('Promise.resolve(1)'));
+    try {
+        $j->eval('Promise.resolve(1)');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'AsyncIncomplete');
+    }
+});
+check('an async IIFE fails instead of silently half-running', function () use ($wasm) {
+    $j = new Terrarium($wasm);
+    $reached = false;
+    $j->register('mark', function () use (&$reached) { $reached = true; });
+    try {
+        $j->eval('(async () => { console.log("before"); await 1; mark(); })()');
+        throw new RuntimeException('expected an AsyncIncomplete rejection');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'AsyncIncomplete');
+    }
+    eq(false, $reached);                 // the continuation never ran — that IS the bug
+    eq('before', $j->output());          // output before the suspension survives
+});
+check('a plain value left with queued jobs -> AsyncIncomplete', function () use ($wasm) {
+    $j = new Terrarium($wasm);
+    throws(GuestException::class, fn () => $j->eval('Promise.resolve().then(() => 1); 42'));
+});
+check('synchronous code is untouched', function () use ($wasm) {
+    $j = new Terrarium($wasm);
+    eq(42, $j->eval('const p = { then: 1 }; 42'));       // not a real promise
+    eq([1, 2], $j->eval('[1, 2]'));
+});
+check('syncOnly is accepted here but not implemented (no compiler to enforce it)', function () use ($wasm) {
+    // The compile option is a general host->guest channel; only the TypeScript
+    // guest has an AST to enforce it against. This guest catches the same
+    // hazard at run time instead, which is on regardless.
+    $j = new Terrarium($wasm, syncOnly: true);
+    eq([], $j->check('async function f() { await 1; }'));   // still just a parse check
+    eq(2, $j->eval('1 + 1'));
+    throws(GuestException::class, fn () => $j->eval('(async () => { await 1; })()'));
+});
+
 echo "\nerrors & limits\n";
 check('JS error -> GuestException', fn () => throws(GuestException::class, fn () => $js->eval('null.field')));
 check('infinite loop contained by the time budget', function () use ($wasm) {

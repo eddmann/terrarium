@@ -15,7 +15,7 @@ subclasses. Import what you use (`use Terrarium\Terrarium;`) or reference the
 fully-qualified names. Install via `composer require eddmann/terrarium` (which
 declares the `ext-terrarium` requirement) or require `lib/Terrarium.php` directly.
 
-### `new Terrarium(string $path, ?int $memoryLimit = null, ?int $timeoutMs = null, ?int $maxStack = null, ?int $fuel = null, bool $isolated = false)`
+### `new Terrarium(string $path, ?int $memoryLimit = null, ?int $timeoutMs = null, ?int $maxStack = null, ?int $fuel = null, bool $isolated = false, bool $syncOnly = false)`
 
 Load a guest engine from a `.wasm` file. Limits default to unbounded; pass
 non-zero values to contain resource abuse:
@@ -30,6 +30,71 @@ non-zero values to contain resource abuse:
 - **`isolated`** — `true` runs each `eval()` in a fresh instance (hermetic); the
   default shares one persistent instance so guest state accumulates across calls
   (see [execution modes](execution-modes.md)).
+- **`syncOnly`** — `true` makes a compiling guest **reject asynchronous and
+  generator syntax at compile time** (see below).
+
+#### Synchronous-only guests
+
+There is no event loop in the sandbox: no guest drains the job (microtask)
+queue, so a program that suspends never resumes. Terrarium closes that hole from
+both ends.
+
+**At run time, always on.** On the QuickJS-based guests (JavaScript, TypeScript)
+an `eval` whose result is a `Promise` — in *any* state, since `.then` callbacks
+are queued rather than called — or that leaves jobs queued raises a
+`Terrarium\GuestException` of type **`AsyncIncomplete`**. Previously such a
+program half-ran in silence: an async IIFE returned a pending promise and its
+continuation was dead code. Output printed before the suspension is preserved,
+as with any other guest error.
+
+```php
+$js->eval('(async () => { console.log("before"); await 1; save(); })()');
+// Terrarium\GuestException: AsyncIncomplete: asynchronous guest code cannot
+// complete: the program evaluated to a Promise, and the job queue is never
+// drained here, so its continuation never ran. …
+echo $js->output();   // "before"  — save() never ran
+```
+
+**At compile time, opt in with `syncOnly: true`.** The **TypeScript** guest
+walks the parsed source and rejects every `async` function (declaration,
+expression, arrow, class or object-literal method), `await` (including top-level
+`await`), `for await`, generator `function*`/`*method()`, and `yield` — each as
+a diagnostic of type **`TSSyncOnly`** carrying the source line and a message
+naming the synchronous alternative:
+
+```php
+$ts = new Terrarium('typescript_guest.wasm', syncOnly: true);
+$ts->eval('const rows = await db.query("…");');
+// Terrarium\GuestException: TSSyncOnly: `await` is not supported: this
+// environment is synchronous; SDK calls return values directly — remove
+// `await` and use the returned value. (line 1)
+```
+
+Because this is an AST walk and not a text search, prose is safe: a string
+literal or comment containing *"we await your reply"* is not a violation, and
+neither is an identifier or property merely named `async` or `await`.
+
+Two properties worth knowing:
+
+- **`// @ts-nocheck` does not disable it.** The pragma opts out of the *type*
+  check — an author's preference about their own annotations. `syncOnly` is a
+  constraint of the host, which genuinely cannot finish such a program, so the
+  walk runs regardless.
+- **`eval()` reports the first violation** (and counts the rest, as with type
+  errors); **`check()` lists every one**, ahead of the type diagnostics.
+
+Guests without a compiler (JavaScript, Python, PHP) accept the option and do
+nothing with it — only the TypeScript guest has an AST to enforce it against.
+The QuickJS guest is still covered by the run-time `AsyncIncomplete` failure
+above; for Boa and RustPython the option is currently inert.
+
+The engine primitive underneath takes the option as an open map, which is the
+call to reach for when using `Terrarium\Runtime` directly:
+
+```php
+$rt = new Terrarium\Runtime($wasmBytes);
+$rt->setCompileOptions(['sync_only' => true]);   // guests ignore keys they don't know
+```
 
 ### `register(string $name, callable $fn): void`
 

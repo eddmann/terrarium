@@ -51,7 +51,7 @@ use exceptions::{
     TerrariumException, TerrariumGuestException, TerrariumMemoryException,
     TerrariumTimeoutException, TerrariumTrapException,
 };
-use marshal::{middle_to_zval, MiddleValue};
+use marshal::{middle_to_zval, zval_to_middle, MiddleValue};
 
 /// Per-`Store` data: the `StoreLimits` the `ResourceLimiter` hook reads, plus a
 /// WASI context for guests that link a libc (capability-only guests never touch it).
@@ -187,6 +187,36 @@ impl Terrarium {
     /// `$dts` capability. The PHP facade calls this on every `register()`.
     pub fn set_types(&self, dts: String) {
         self.state.set_types(dts);
+    }
+
+    /// Replace the compile options served to compiling guests via the reserved
+    /// `$opts` capability. Takes a PHP associative array; the guest reads the
+    /// keys it understands and ignores the rest, so options are added without
+    /// an ABI change and are harmless on a guest that implements none.
+    ///
+    /// The option the bundled guests define today is `sync_only` (bool), which
+    /// the **TypeScript** guest enforces as a compile-time rejection of
+    /// async/generator syntax. Other guests accept it and do nothing with it —
+    /// the QuickJS-based guests instead fail *at run time* with `AsyncIncomplete`
+    /// when a program cannot finish, which is on by default everywhere.
+    ///
+    /// ```php
+    /// $rt->setCompileOptions(['sync_only' => true]);
+    /// ```
+    pub fn set_compile_options(&self, options: &Zval) -> PhpResult<()> {
+        let entries = match zval_to_middle(options).map_err(PhpException::default)? {
+            MiddleValue::Map(entries) => entries,
+            // An empty PHP array has sequential (no) keys, so it arrives as an
+            // array: treat it as "no options" rather than a type error.
+            MiddleValue::Array(items) if items.is_empty() => Vec::new(),
+            _ => {
+                return Err(PhpException::from_class::<TerrariumException>(
+                    "compile options must be an associative array of option => value".to_owned(),
+                ))
+            }
+        };
+        self.state.set_compile_options(entries);
+        Ok(())
     }
 
     /// Store a live PHP object host-side and return an opaque handle the guest

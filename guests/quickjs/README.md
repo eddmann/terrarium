@@ -29,6 +29,26 @@ names as JS globals (no synthetic root — `user.fetch(...)`), and routes
 `check()` here is a **parse check**: it compiles the source without running it and
 returns any `SyntaxError` as a diagnostic (`[]` = parses).
 
+## No event loop: asynchronous code fails loudly
+
+Nothing calls `JS_ExecutePendingJob`, so the job (microtask) queue is never
+drained and a program that suspends never resumes. Rather than half-run it in
+silence, `eval` inspects the result before marshaling it and returns the
+`$error` sentinel typed **`AsyncIncomplete`** when either holds:
+
+- **the result is a `Promise`** (`JS_IsPromise`), in *any* state — an
+  already-fulfilled promise still failed, because `.then` callbacks are queued
+  rather than called, so the chain's continuations never ran;
+- **jobs are queued** (`JS_IsJobPending`) — the program returned a plain value
+  but left work behind it.
+
+This is on by default and not configurable: it reports a fact about the
+environment. Whatever the program printed first is preserved in `output()`,
+exactly as for a thrown exception. The `sync_only` compile option (reserved
+`$opts` capability) is *accepted* here but not implemented — there is no
+compiler to enforce it against; see the
+[TypeScript guest](../typescript/README.md), which rejects the syntax up front.
+
 ## Notes
 
 - The pin is shared with the [TypeScript guest](../typescript/README.md): its

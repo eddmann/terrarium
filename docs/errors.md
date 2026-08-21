@@ -63,6 +63,35 @@ and the **source line**. Because a type-aware guest erases types
 whitespace-preserving (see below), that line points at the source you submitted,
 not at some transformed intermediate.
 
+## Guest error types
+
+The `type` in `Type: message (line N)` is the guest's own error name where the
+language has one (`TypeError`, `SyntaxError`, a Python exception class). Two
+types are Terrarium's own, and are the ones worth matching on:
+
+| Type | Raised by | When |
+|---|---|---|
+| `TS<code>` | TypeScript guest | a type diagnostic — the compiler's own code (`TS2345`, `TS2322`, …) |
+| `TSSyntaxError` | TypeScript guest | syntax that cannot be type-erased (`enum`, `namespace`, …) |
+| `TSSyncOnly` | TypeScript guest, with `syncOnly: true` | `async`, `await`, `for await`, `function*`, `yield` — rejected before anything runs |
+| `AsyncIncomplete` | QuickJS + TypeScript guests, **always** | the eval produced a `Promise`, or left jobs queued: nothing drains the job queue, so it can never finish |
+
+`AsyncIncomplete` is the loud version of a failure that used to be silent. The
+sandbox has no event loop, so an async program half-ran and looked fine:
+
+```php
+try {
+    $js->eval('(async () => { console.log("step 1"); await 1; save(); })()');
+} catch (Terrarium\GuestException $e) {
+    echo $e->getMessage();   // "AsyncIncomplete: asynchronous guest code cannot complete: …"
+    echo $js->output();      // "step 1"   — and save() never ran
+}
+```
+
+`TSSyncOnly` is the same hazard caught a step earlier, at compile time, when the
+host opts in with [`syncOnly: true`](api.md#synchronous-only-guests). Both are
+`Terrarium\GuestException`s; neither poisons the instance.
+
 ## Static validation vs. runtime errors
 
 `check()` is the other side of this: it returns diagnostics as **data**, never

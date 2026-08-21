@@ -92,6 +92,14 @@ returns *every* diagnostic as data (`[]` = passed). It works on every guest at t
 depth its language allows (a full type-check here; a syntax/compile check on the
 JS, Python, and PHP guests). See [docs/api.md](docs/api.md).
 
+The sandbox is **synchronous** — there is no event loop, so a program that
+suspends can never resume. That failure is never silent: a JS/TS eval yielding a
+promise or leaving callbacks queued raises `AsyncIncomplete`, and
+`new Terrarium(..., syncOnly: true)` makes the TypeScript guest reject `async`,
+`await`, `function*` and `yield` at compile time, with the source line and a
+message naming the synchronous alternative. See
+[synchronous-only guests](docs/api.md#synchronous-only-guests).
+
 ## Installation
 
 Prebuilt binaries are attached to each
