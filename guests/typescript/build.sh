@@ -144,10 +144,39 @@ fi
 # --- 4a. libs.js: the lib .d.ts chain as a global map ------------------------
 # Everything except the environments the sandbox doesn't have (dom, webworker,
 # scripthost): the type environment must equal the real execution environment.
+#
+# One extra entry, `lib.es5.no-intl.d.ts`, is generated here rather than
+# shipped by TypeScript. driver.js serves the whole `*.intl.d.ts` family empty
+# because quickjs-ng is built without Intl, but lib.es5.d.ts declares its own
+# `namespace Intl` and cannot be emptied -- everything else in ES5 lives in it.
+# So the variant drops exactly the namespace's three VALUE declarations
+# (`var Collator`, `var NumberFormat`, `var DateTimeFormat`) and keeps every
+# interface, which leaves `Intl` a TYPE-ONLY namespace:
+#
+#   new Intl.NumberFormat("en")            -> a check error (Intl is not a value)
+#   (1).toLocaleString("en", opts)         -> still fine; `Intl.NumberFormatOptions`
+#                                             still resolves, so the signature is intact
+#
+# Deleting the whole namespace would leave those option types dangling; keeping
+# the values would keep lying about an engine that has no Intl at all. The
+# substitution is applied in driver.js (LIB_SUBSTITUTES) and mirrored by
+# tools/dev-driver.mjs; tests/php/11_es_surface.php is the parity evidence.
 echo "Generating libs.js ..."
 python3 - "$TSPKG/lib" "$BUILD/libs.js" <<'PY'
-import json, os, sys
+import json, os, re, sys
 libdir, out = sys.argv[1], sys.argv[2]
+
+INTL_VALUE = re.compile(r"^\s{4}var [A-Za-z]+: [A-Za-z]+Constructor;\n", re.M)
+
+def strip_intl_values(text):
+    """Remove the value declarations from lib.es5's `declare namespace Intl`."""
+    start = text.index("declare namespace Intl {")
+    end = text.index("\n}\n", start) + len("\n}\n")
+    body, removed = INTL_VALUE.subn("", text[start:end])
+    if removed == 0:
+        raise SystemExit("lib.es5.d.ts: no Intl value declarations matched -- the strip is stale")
+    return text[:start] + body + text[end:], removed
+
 libs = {}
 for name in sorted(os.listdir(libdir)):
     if not (name.startswith("lib.") and name.endswith(".d.ts")):
@@ -156,9 +185,18 @@ for name in sorted(os.listdir(libdir)):
         continue
     with open(os.path.join(libdir, name), "r", encoding="utf-8") as f:
         libs[name] = f.read()
+
+es5 = libs.get("lib.es5.d.ts")
+if es5 is None:
+    raise SystemExit("lib.es5.d.ts missing from the TypeScript package")
+stripped, removed = strip_intl_values(es5)
+libs["lib.es5.no-intl.d.ts"] = stripped
+print(f"  lib.es5.no-intl.d.ts: {removed} Intl value declarations removed, "
+      f"{len(es5) - len(stripped)} bytes")
+
 with open(out, "w", encoding="utf-8") as f:
     f.write("globalThis.LIBS = ")
-    f.write(json.dumps(libs))
+    f.write(json.dumps(libs, sort_keys=True))
     f.write(";\n")
 print(f"  {len(libs)} lib files, {os.path.getsize(out)} bytes")
 PY

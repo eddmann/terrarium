@@ -457,6 +457,37 @@ check('a property merely NAMED accessor is fine', function () use ($wasm) {
     eq(1, $ts->eval("const o = { accessor: 1 };\no.accessor"));
 });
 
+// The checker's `lib` must not declare what the engine does not implement.
+// `Intl` is the last hole: lib.es5.d.ts carries its own `declare namespace Intl`
+// that the per-file exclusion cannot reach, so the build strips the namespace's
+// value declarations instead (see build.sh step 4a).
+echo "\nIntl is declared as types only, because the engine has none\n";
+check('new Intl.NumberFormat() is a check error, not a runtime ReferenceError', function () use ($wasm) {
+    $ts = new Terrarium($wasm);
+    $diags = $ts->check('const s: string = new Intl.NumberFormat("en").format(1);');
+    eq(1, count($diags));
+    eq(1, $diags[0]['line']);
+    contains($diags[0]['message'], 'Intl');
+});
+check('every Intl constructor is out of reach', function () use ($wasm) {
+    $ts = new Terrarium($wasm);
+    foreach (['Collator', 'NumberFormat', 'DateTimeFormat'] as $ctor) {
+        eq(1, count($ts->check("const x = new Intl.$ctor();\nx;")));
+    }
+});
+check('...but the locale-blind formatters that DO exist still type-check', function () use ($wasm) {
+    // Deleting the namespace outright would have broken these: their `options`
+    // parameters are typed `Intl.NumberFormatOptions` and friends, so the
+    // interfaces have to survive even though the constructors must not.
+    $ts = new Terrarium($wasm);
+    eq([], $ts->check(
+        "const a: string = (1234.5).toLocaleString(\"en\", { minimumFractionDigits: 2 });\n" .
+        "const b: number = \"a\".localeCompare(\"b\", \"en\", { sensitivity: \"base\" });\n" .
+        "const c: string = new Date(0).toLocaleDateString(\"en\", { year: \"numeric\" });\n" .
+        "[a, b, c];\n"
+    ));
+});
+
 echo "\nchannels\n";
 check('console.log is captured as output()', function () use ($wasm) {
     $ts = new Terrarium($wasm);

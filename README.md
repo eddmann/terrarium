@@ -111,12 +111,20 @@ rather than approximated. See
 [docs/api.md](docs/api.md#type-argument-schemas).
 
 The sandbox is **synchronous** — there is no event loop, so a program that
-suspends can never resume. That failure is never silent: a JS/TS eval yielding a
-promise or leaving callbacks queued raises `AsyncIncomplete`, and
-`new Terrarium(..., syncOnly: true)` makes the TypeScript guest reject `async`,
-`await`, `function*` and `yield` at compile time, with the source line and a
-message naming the synchronous alternative. See
-[synchronous-only guests](docs/api.md#synchronous-only-guests).
+suspends can never resume. That failure is never silent: a JS/TS eval that
+yields a promise, leaves callbacks queued, or registers a promise reaction
+raises `AsyncIncomplete`, and `new Terrarium(..., syncOnly: true)` makes the
+TypeScript guest reject `async`, `await`, `function*`, `yield` **and every use
+of a promise** at compile time, with the source line and a message naming the
+synchronous alternative. Exactly what the run-time guard does and does not catch
+is spelled out in
+[errors.md](docs/errors.md#exactly-what-asyncincomplete-catches-and-what-it-does-not);
+see also [synchronous-only guests](docs/api.md#synchronous-only-guests).
+
+The TypeScript guest's `check()` also refuses what the sandbox **engine** cannot
+parse even though the compiler accepts it (`accessor` class members), and its
+`lib` declares nothing the engine lacks (no `Intl`, no `Atomics`) — so a clean
+`check()` means "this will run", not merely "this type-checks".
 
 ## Installation
 

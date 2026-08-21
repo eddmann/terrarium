@@ -189,6 +189,46 @@ check('`accessor` fields are not parsed by the engine', fn () => eq('SyntaxError
     "try { eval('class C { accessor x = 1 }'); 'present' } catch (e) { e.constructor.name }"
 )));
 
+// PARITY. The probes above ask the engine. These ask whether the CHECKER agrees
+// — which is the property the whole suite exists for, and the one that was
+// quietly broken: `new Intl.NumberFormat()` and `accessor` fields both passed
+// check() and then died at eval, so a program could publish clean and fail on
+// its first run. An engine hole is only honoured if check() refuses it too.
+echo "\nparity: what the engine lacks, check() must refuse (not merely eval)\n";
+$refuses = function (string $label, string $source, ?string $type = null) use ($ts) {
+    check($label, function () use ($ts, $source, $type) {
+        $diags = $ts->check($source);
+        if ($diags === []) {
+            throw new RuntimeException("check() was clean; this dies at run time:\n$source");
+        }
+        if ($type !== null) {
+            eq($type, $diags[0]['type']);
+        }
+    });
+};
+$refuses('Intl is not a value: new Intl.NumberFormat()', 'const s: string = new Intl.NumberFormat("en").format(1);');
+$refuses('...nor Intl.DateTimeFormat', 'const d = new Intl.DateTimeFormat("en");\nd;');
+$refuses('...nor Intl.Collator', 'const c = new Intl.Collator("en");\nc;');
+$refuses('Atomics is undeclared', 'Atomics.add(new Int32Array(4), 0, 1);');
+$refuses('structuredClone is undeclared', 'structuredClone({ a: 1 });');
+$refuses('a growable SharedArrayBuffer is undeclared', 'new SharedArrayBuffer(8, { maxByteLength: 16 });');
+$refuses('`accessor` members are refused as TSEngineUnsupported', 'class C { accessor x = 1 }', 'TSEngineUnsupported');
+check('...and the locale-blind formatters that DO exist still check clean', function () use ($ts) {
+    // The other half of the Intl parity: stripping the namespace's VALUES must
+    // not take the option TYPES its surviving signatures reference with it.
+    eq([], $ts->check(
+        "const a: string = (1234.5).toLocaleString(\"en\", { minimumFractionDigits: 2 });\n" .
+        "const b: number = \"a\".localeCompare(\"b\");\n" .
+        "const c: string = new Date(0).toLocaleDateString(\"en\");\n" .
+        "[a, b, c];\n"
+    ));
+});
+check('...and an explicit get/set pair still checks and runs', function () use ($ts) {
+    $source = "class C {\n  #x = 1;\n  get x(): number { return this.#x; }\n  set x(v: number) { this.#x = v; }\n}\nconst c = new C();\nc.x = 2;\nc.x";
+    eq([], $ts->check($source . ";\n"));
+    eq(2, $ts->eval($source));
+});
+
 // The engine runs ahead of any lib we would pin: recorded so a future raise can
 // see what is already there, and so a regression here is caught.
 echo "\nahead of the pinned lib (present, deliberately undeclared)\n";

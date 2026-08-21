@@ -3,6 +3,8 @@
 //   node tools/dev-driver.mjs analyze <file.ts> [callee ...]
 //   node tools/dev-driver.mjs check   <file.ts>
 //   echo 'const a = ctx.agent<{ n: number }>({});' | node tools/dev-driver.mjs analyze - ctx.agent
+//   node tools/dev-driver.mjs check <file.ts> --sync-only     # set the sync_only option
+//   node tools/dev-driver.mjs compile <file.ts> [--nocheck]   # the eval path's compile step
 //
 // Why this exists: iterating on the type→JSON-Schema serializer inside the
 // 28 MB wasm fixture means a multi-minute rebuild per edit. driver.js is a
@@ -39,7 +41,24 @@ function typescriptDir() {
 }
 
 // The same lib set the build bakes in: everything except the environments the
-// sandbox does not have.
+// sandbox does not have, plus the generated `lib.es5.no-intl.d.ts` variant.
+//
+// MIRRORS build.sh step 4a. Two implementations of one rule is a smell, but the
+// build's copy is Python inside a heredoc and this one has to run under plain
+// Node — so they are kept side by side deliberately, and the authoritative
+// evidence that they agree is the PHP suite running against the built fixture
+// (tests/php/11_es_surface.php), not this file.
+function stripIntlValues(text) {
+    const start = text.indexOf("declare namespace Intl {");
+    if (start === -1) throw new Error("lib.es5.d.ts: no `declare namespace Intl` -- the strip is stale");
+    const end = text.indexOf("\n}\n", start) + "\n}\n".length;
+    const body = text.slice(start, end).replace(/^ {4}var [A-Za-z]+: [A-Za-z]+Constructor;\n/gm, "");
+    if (body === text.slice(start, end)) {
+        throw new Error("lib.es5.d.ts: no Intl value declarations matched -- the strip is stale");
+    }
+    return text.slice(0, start) + body + text.slice(end);
+}
+
 function loadLibs(tsDir) {
     const libDir = join(tsDir, "lib");
     const libs = Object.create(null);
@@ -48,6 +67,7 @@ function loadLibs(tsDir) {
         if (["dom", "webworker", "scripthost"].some((x) => name.includes(x))) continue;
         libs[name] = readFileSync(join(libDir, name), "utf8");
     }
+    libs["lib.es5.no-intl.d.ts"] = stripIntlValues(libs["lib.es5.d.ts"]);
     return libs;
 }
 
@@ -61,14 +81,18 @@ globalThis.tsBlankSpace = () => {
 
 vm.runInThisContext(readFileSync(join(GUEST, "driver.js"), "utf8"), { filename: "driver.js" });
 
-const [, , command = "analyze", file = "-", ...callees] = process.argv;
+const [, , command = "analyze", file = "-", ...rest] = process.argv;
 const source = file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
+const callees = rest.filter((a) => !a.startsWith("--"));
 const options = {};
 if (callees.length > 0) options.type_argument_schemas = callees;
+if (rest.includes("--sync-only")) options.sync_only = true;
 
 const result =
     command === "check"
         ? globalThis.__terrariumCheck(source, "", options)
-        : globalThis.__terrariumAnalyze(source, "", options);
+        : command === "compile"
+          ? globalThis.__terrariumCompile(source, "", options)
+          : globalThis.__terrariumAnalyze(source, "", options);
 
 console.log(JSON.stringify(result, null, 2));

@@ -65,11 +65,23 @@
     //                        under a misleading name: dropped with the rest.
     // Emptying a file keeps the /// <reference lib=...> graph intact, so the
     // chain still resolves. lib.es5.d.ts's own `declare namespace Intl` is not
-    // reachable at file granularity and stays declared -- a pre-existing gap
-    // this pin neither widens nor closes.
+    // reachable at file granularity; it is handled by the substitution below.
     var LIB_EXCLUDED = /\.(intl|sharedmemory)\.d\.ts$/;
 
+    // lib.es5.d.ts's own `declare namespace Intl` is not reachable at file
+    // granularity, so the build emits a second entry beside it -- the same text
+    // with the namespace's three VALUE declarations (`var Collator`,
+    // `var NumberFormat`, `var DateTimeFormat`) removed, leaving the option
+    // interfaces the locale-blind `toLocaleString`/`localeCompare` signatures
+    // still reference. `Intl` therefore survives as a type-only namespace:
+    // `Intl.NumberFormatOptions` resolves, and `new Intl.NumberFormat()` is a
+    // check error instead of clean code that dies at run time.
+    // See guests/typescript/build.sh step 4a for the generator.
+    var LIB_SUBSTITUTES = { "lib.es5.d.ts": "lib.es5.no-intl.d.ts" };
+
     function libText(short) {
+        var sub = LIB_SUBSTITUTES[short];
+        if (sub !== undefined && LIBS[sub] !== undefined) return LIBS[sub];
         if (LIBS[short] === undefined) return undefined;
         return LIB_EXCLUDED.test(short) ? "" : LIBS[short];
     }
