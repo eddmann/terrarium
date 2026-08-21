@@ -373,6 +373,89 @@ check('the schema string is byte-identical wherever the call sits', function () 
     eq(false, str_contains($near['schemas'][0]['schema'], 'line'));
 });
 
+// A name is not an identity. Textual callee matching agreed with the author
+// only when they wrote the call one particular way — and agreed with the WRONG
+// declaration when a local shadowed the SDK. Both failures are silent: no
+// schema, no diagnostic, a clean publish and a first-run failure. Matching now
+// resolves each call through the checker, so these are properties of the
+// DECLARATION the call lands on, not of how the callee happens to be spelled.
+echo "\nevery spelling of the same call is the same call\n";
+$spellings = [
+    'parenthesised callee' => '(ctx.model)<{ a: string }>({})',
+    'non-null assertion'   => 'ctx!.model<{ a: string }>({})',
+    'element access'       => 'ctx["model"]<{ a: string }>({})',
+    'optional chaining'    => 'ctx?.model<{ a: string }>({})',
+    'aliased to a local'   => 'm<{ a: string }>({})',
+];
+foreach ($spellings as $label => $call) {
+    check($label . ' bakes the same schema', function () use ($wasm, $call) {
+        $out = guest($wasm)->analyze(SDK . "\nconst m = ctx.model;\nconst r = {$call};\n[m, r];\n");
+        eq([], schemaErrors($out));
+        eq(1, count($out['schemas']));
+        eq(0, $out['schemas'][0]['ordinal']);
+        eq('ctx.model', $out['schemas'][0]['callee']);
+        eq(3, $out['schemas'][0]['line']);
+        eq('{"type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false}',
+            $out['schemas'][0]['schema']);
+    });
+}
+check('all five spellings in one program, in source order, none missed', function () use ($wasm) {
+    $out = guest($wasm)->analyze(SDK . <<<'TS'
+
+        const m = ctx.model;
+        const a = (ctx.model)<{ a: string }>({});
+        const b = ctx!.model<{ b: string }>({});
+        const c = ctx["model"]<{ c: string }>({});
+        const d = m<{ d: string }>({});
+        const e = ctx.model<{ e: string }>({});
+        [a, b, c, d, e];
+        TS);
+    eq([], $out['diagnostics']);
+    eq([0, 1, 2, 3, 4], array_column($out['schemas'], 'ordinal'));
+    eq(array_fill(0, 5, 'ctx.model'), array_column($out['schemas'], 'callee'));
+    eq([3, 4, 5, 6, 7], array_column($out['schemas'], 'line'));
+    // Each one carries its OWN type argument — the match is per call, not a
+    // blanket "the first one wins".
+    eq(['a', 'b', 'c', 'd', 'e'], array_map(
+        fn (array $s): string => array_key_first(json_decode($s['schema'], true)['properties']),
+        $out['schemas']
+    ));
+});
+check('a LOCALLY SHADOWED ctx.agent is not extracted, and does not shift ordinals', function () use ($wasm) {
+    // The poisoning case: the local object is a different function that merely
+    // shares the spelling. Textual matching gave it ordinal 0 and pushed the
+    // real call to 1 — so a host keying baked schemas by ordinal wired the
+    // wrong schema to the wrong call.
+    $out = guest($wasm)->analyze(SDK . <<<'TS'
+
+        function local(): { shadowed: string } {
+            const ctx = { agent<T>(i: unknown): T { return i as T; } };
+            return ctx.agent<{ shadowed: string }>({});
+        }
+        const real = ctx.agent<{ real: string }>({});
+        [local, real];
+        TS);
+    eq([], $out['diagnostics']);
+    eq(1, count($out['schemas']));
+    eq(0, $out['schemas'][0]['ordinal']);          // the REAL call keeps ordinal 0
+    eq(6, $out['schemas'][0]['line']);
+    eq('{"type":"object","properties":{"real":{"type":"string"}},"required":["real"],"additionalProperties":false}',
+        $out['schemas'][0]['schema']);
+});
+check('a matched call with the wrong arity of type arguments errors loudly', function () use ($wasm) {
+    // Defensive: no sane SDK signature takes two, so this should be
+    // unreachable — but "we matched your call and could not serialise it" must
+    // never be spelled as silence, which is the whole lesson of this section.
+    $out = guest($wasm)->analyze(
+        "declare const ctx: { model<T, U>(input: unknown): T };\nconst a = ctx.model<{ a: string }, number>({});\na;\n"
+    );
+    eq([], $out['schemas']);
+    $errors = schemaErrors($out);
+    eq(1, count($errors));
+    eq(0, $errors[0]['ordinal']);
+    contains($errors[0]['message'], '2 type arguments');
+});
+
 echo "\nwhat is NOT extracted\n";
 check('a matched callee without a type argument is untouched', function () use ($wasm) {
     // Schema-first authoring stays legal: the guest extracts, it does not police

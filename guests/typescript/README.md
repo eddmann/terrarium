@@ -57,7 +57,7 @@ proxies commonly 403 the codeload redirect while allowing git over HTTPS.
 
 ## Two contexts, one rule
 
-- A persistent **compiler** context (tsc + the non-DOM `lib.es2020` chain + the
+- A persistent **compiler** context (tsc + the non-DOM `lib.es2024` chain + the
   driver in `driver.js`) — created once per instance; lib parses and `Program`
   state amortize across evals.
 - A fresh **user** context per eval — identical to the plain QuickJS guest.
@@ -101,12 +101,66 @@ capability the host does not have, so the walk runs regardless of the pragma.
 `eval` gates on the first violation (counting the rest, like type errors);
 `check()` returns them all, ahead of the type diagnostics.
 
+**Promises, not just keywords.** A promise settles by running a job, and no job
+ever runs, so `sync_only` refuses the whole family — and it does so through the
+checker rather than by spelling:
+
+| Construct | Detected as |
+|---|---|
+| `new Promise(…)`, `Promise.resolve(…)`, `Promise` in a type | an identifier resolving to the **global** `Promise`/`PromiseLike` declaration (a class of your own named `Promise` is a different symbol, and is fine) |
+| any expression whose type is a promise — including `db.query()` on a capability declared to return one | the checker's type at that node, named `Promise`/`PromiseLike` or with a `then` that hands back one |
+| `.then` / `.catch` / `.finally` on such an expression | a call through that member, with the receiver's type checked |
+
+Each is a `TSSyncOnly` diagnostic at the **outermost** promise-typed node, so a
+chain reports once rather than once per sub-expression. An object with an
+ordinary `then(cb)` method of its own is *not* a promise: a thenable's `then`
+returns another thenable, and that one returns `void`.
+
+This closes the hole `AsyncIncomplete` cannot: `new Promise(() => {}); p.then(f)`
+with a plain result queues no job at all, so the run-time guards see nothing to
+complain about.
+
+**The `@ts-nocheck` compile path is conservative, deliberately.** No Program is
+built there, so the promise rules match on shape alone: `new Promise`, the
+identifier `Promise`, and a call through a member named `then`/`catch`/`finally`.
+The last over-matches a user object's own `.then`. That is an accepted trade in
+an opt-in strict mode: `sync_only` + `@ts-nocheck` is a caller asking for the
+strict environment and then declining the type information that makes the check
+exact. Dropping the pragma restores precise matching, and `check()`/`analyze()`
+always build a Program, so they are never conservative.
+
 **`AsyncIncomplete`, always on, run time.** Independently of the option, an eval
-that yields a `Promise` (in any state) or leaves jobs queued comes back as the
-`$error` sentinel typed `AsyncIncomplete` — see the
+that yields a `Promise` (in any state), leaves jobs queued, or registered any
+promise reaction comes back as the `$error` sentinel typed `AsyncIncomplete` —
+see the
 [QuickJS guest](../quickjs/README.md#no-event-loop-asynchronous-code-fails-loudly),
-which uses the identical check. That covers what the option cannot: `@ts-nocheck`
-source, or a promise chain built without `async`/`await` at all.
+which uses the identical check and sets out both the soundness argument and the
+one residual gap. That covers what the option cannot: `@ts-nocheck` source, a
+promise chain built without `async`/`await` at all, and hosts that never set the
+option.
+
+## Engine-unsupported syntax
+
+**Always on, no option.** The checker's library describes a language; the engine
+implements one. Where they disagree about what can even be *parsed*, a clean
+`check()` would otherwise mean nothing — the code publishes and then dies with a
+`SyntaxError` inside the sandbox. `driver.js` refuses those constructs as
+**`TSEngineUnsupported`** diagnostics, with the line and the alternative:
+
+| Construct | Why |
+|---|---|
+| `accessor` class members (`class C { accessor x = 1 }`) | quickjs-ng `v0.16.2` raises a `SyntaxError` on the keyword, and ts-blank-space emits it verbatim (it is not a type) |
+
+The list is meant to grow and shrink. To add a case, extend
+`engineUnsupportedAt()` in `driver.js` and add a probe to
+`tests/php/11_es_surface.php` proving the engine really rejects it; to retire one
+after a quickjs-ng bump implements it, delete the case and flip that probe from
+"absent" to "implemented". `tools/lib-audit/audit.php --parity` is what catches a
+construct that *should* be on the list: it fails whenever a probe passes
+`check()` and then throws at `eval()`.
+
+Like `sync_only`, this is not skipped by `// @ts-nocheck` — it states a fact
+about the engine, not a preference about the source.
 
 ## Type argument → JSON Schema
 
@@ -131,10 +185,18 @@ host derives the contract. The full accepted/refused matrix lives in
 [docs/api.md](../../docs/api.md#type-argument-schemas); the parts that are
 properties of *this* implementation:
 
-- **The walk is structural, not textual.** A callee matches by its identifier
-  chain (`ctx` `.` `agent`), never by `getText()`, so spacing, line wrapping and
-  interleaved comments cannot make or break a match. Only calls carrying exactly
-  one type argument match; a call without one is left alone entirely.
+- **Matching is semantic, not textual.** Each configured name is resolved once
+  per program to the declarations its calls must land on, and a call matches
+  when `getResolvedSignature()` points at one of them. A name is not an
+  identity: comparing the callee's *text* silently missed `(ctx.model)<T>()`,
+  `ctx!.model<T>()`, `ctx["model"]<T>()` and `const m = ctx.model; m<T>()` — no
+  schema and no diagnostic, so a program published clean and failed on its first
+  run — while *matching* a locally shadowed `ctx.agent`, which is a different
+  function that happens to share a spelling, baking a wrong schema and shifting
+  every ordinal after it. Letting the checker resolve the call fixes both at
+  once, and keeps reformatting inert for free. A call without type arguments is
+  left alone entirely (schema-first authoring stays legal); a matched call
+  carrying more than one is a loud `TSSchemaError`, never a silent skip.
 - **Identity is the call ordinal** — the 0-based index among matched calls in
   source order (collected then sorted by start position, so it is a property of
   the text rather than of the traversal). A line:column would be repointed by
@@ -213,14 +275,29 @@ parse, check and type-erase source.
 - **ts-blank-space** ships ESM importing `"typescript"` and `"./blank-string.js"`;
   `build.sh` rewrites those imports to the globals the compiler context provides.
 - **libs** are the `lib.*.d.ts` chain minus the environments the sandbox doesn't
-  have (`dom`, `webworker`, `scripthost`) — the type environment must equal the
-  real execution environment.
-- The checker is pinned to **`target: ES2020` / `lib: ["lib.es2020.d.ts"]`**
-  (`driver.js`), which is deliberately narrower than the engine. QuickJS-ng runs
-  well ahead of that — `Object.groupBy`, `Iterator` helpers, `RegExp.escape`,
-  `Float16Array` and friends all exist at runtime — but the checker rejects them,
-  so an engine bump does **not** widen what submitted TypeScript may use. Anything
-  past ES2020 is reachable only via `@ts-nocheck`. Widening the surface is a
-  separate, deliberate change: raise the `target`/`lib` pin in `driver.js` (and
-  the `.d.ts` the runtime is described by) rather than expecting a QuickJS-ng
-  upgrade to do it.
+  have — the type environment must equal the real execution environment. Three
+  exclusions, at two granularities:
+  - `dom`, `webworker`, `scripthost` are not bundled at all;
+  - `*.intl.d.ts` and `*.sharedmemory.d.ts` are bundled but served **empty**,
+    which keeps the `/// <reference lib=…>` graph resolvable while declaring
+    nothing (there is no `Intl` and no `Atomics` in this engine);
+  - `lib.es5.d.ts` carries its own `declare namespace Intl`, which no per-file
+    rule can reach, so `build.sh` emits a second entry — `lib.es5.no-intl.d.ts`
+    — with the namespace's three **value** declarations (`var Collator`,
+    `var NumberFormat`, `var DateTimeFormat`) removed and every interface kept.
+    `driver.js` serves that in place of the original. `Intl` therefore survives
+    as a *type-only* namespace: `new Intl.NumberFormat()` is a check error
+    rather than clean code that dies at run time, while
+    `(1).toLocaleString("en", opts)` and `"a".localeCompare(…)` — which do exist,
+    locale-blind — keep the `Intl.*Options` types their signatures reference.
+    Deleting the namespace outright would have broken those; keeping the values
+    would have kept lying. `tests/php/11_es_surface.php` holds both halves.
+- The checker is pinned to **`target: ES2024` / `lib: ["lib.es2024.d.ts"]`**
+  (`driver.js`), which is still deliberately narrower than the engine.
+  QuickJS-ng runs ahead of it — `Array.fromAsync`, `using` declarations and
+  `Symbol.dispose` all exist at runtime — but the checker rejects them, so an
+  engine bump does **not** silently widen what submitted TypeScript may use.
+  Anything past the pin is reachable only via `@ts-nocheck`. Widening the
+  surface is a separate, deliberate change: raise the `target`/`lib` pin in
+  `driver.js` with the audit in `tools/lib-audit/` as the evidence, rather than
+  expecting a QuickJS-ng upgrade to do it.

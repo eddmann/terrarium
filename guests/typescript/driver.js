@@ -851,30 +851,124 @@
         return out;
     }
 
-    // The dotted name of a callee, structurally: `ctx.agent` from
-    // `ctx.agent<T>(...)` however it is spaced, wrapped, or commented. Matching
-    // on the AST rather than on `getText()` is what keeps a reformat inert.
-    // Anything that is not a plain identifier chain (element access, a call in
-    // the middle, `this`) has no dotted name and never matches.
-    function calleeName(expr) {
-        if (ts.isIdentifier(expr)) return expr.text;
-        if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.name)) {
-            var left = calleeName(expr.expression);
-            return left === undefined ? undefined : left + "." + expr.name.text;
+    // ## Matching a call to a configured callee: SEMANTIC, not textual
+    //
+    // The first implementation compared the callee's dotted TEXT to the
+    // configured name. That silently missed every other spelling of the same
+    // call -- `(ctx.model)<T>()`, `ctx!.model<T>()`, `ctx["model"]<T>()`,
+    // `const m = ctx.model; m<T>()` -- producing no schema AND no diagnostic,
+    // so a program published clean and failed on its first run. It also matched
+    // a LOCALLY SHADOWED `ctx.agent` (a different function that merely shares
+    // the spelling), which both baked a wrong schema and shifted every ordinal
+    // after it.
+    //
+    // Both are the same bug: a name is not an identity. So each configured name
+    // is resolved ONCE per program to the DECLARATIONS its calls must land on,
+    // and a call matches when `getResolvedSignature()` points at one of them.
+    // The checker does the aliasing, the parenthesising and the shadowing for
+    // us, which is precisely its job.
+
+    // Unwrap the spellings that wrap a callee without changing what is called.
+    function unwrapCallee(expr) {
+        while (ts.isParenthesizedExpression(expr) || ts.isNonNullExpression(expr)) {
+            expr = expr.expression;
+        }
+        return expr;
+    }
+
+    // Resolve each configured dotted name against the program's GLOBAL scope
+    // (both the ambient SDK .d.ts and any `declare` in the source itself land
+    // there) and collect the declarations a matching call resolves to:
+    //
+    //   * the declarations of the property's CALL SIGNATURES -- what
+    //     `getResolvedSignature()` returns, and the form that covers both
+    //     `model<T>(i: unknown): T` (a method) and `model: <T>(i: unknown) => T`
+    //     (a property of function type);
+    //   * the symbol's own declarations, for the fallback path below.
+    //
+    // A name that resolves to nothing yields no entry, so a host that lists a
+    // callee this program never declares simply extracts nothing -- the same
+    // outcome as before, and the shape of the name is validated host-side.
+    function resolveCalleeTargets(program, callees) {
+        var checker = program.getTypeChecker();
+        var file = program.getSourceFile("/main.ts");
+        var scope = checker.getSymbolsInScope(file, ts.SymbolFlags.Value);
+        var entries = [];
+        for (var i = 0; i < callees.length; i++) {
+            var parts = callees[i].split(".");
+            var sym;
+            for (var s = 0; s < scope.length; s++) {
+                if (scope[s].getName() === parts[0]) { sym = scope[s]; break; }
+            }
+            for (var p = 1; sym && p < parts.length; p++) {
+                sym = checker.getPropertyOfType(checker.getTypeOfSymbolAtLocation(sym, file), parts[p]);
+            }
+            if (!sym) continue;
+            var decls = [];
+            var sigs = checker.getSignaturesOfType(
+                checker.getTypeOfSymbolAtLocation(sym, file),
+                ts.SignatureKind.Call
+            );
+            for (var g = 0; g < sigs.length; g++) {
+                if (sigs[g].declaration && decls.indexOf(sigs[g].declaration) === -1) {
+                    decls.push(sigs[g].declaration);
+                }
+            }
+            var own = sym.getDeclarations() || [];
+            for (var d = 0; d < own.length; d++) {
+                if (decls.indexOf(own[d]) === -1) decls.push(own[d]);
+            }
+            if (decls.length > 0) entries.push({ name: callees[i], decls: decls });
+        }
+        return entries;
+    }
+
+    function entryForDeclaration(entries, decl) {
+        if (!decl) return undefined;
+        for (var i = 0; i < entries.length; i++) {
+            if (entries[i].decls.indexOf(decl) !== -1) return entries[i].name;
         }
         return undefined;
     }
 
-    // Every matched call in SOURCE ORDER: callee in `callees`, exactly one type
-    // argument. Sorted by start position rather than by visit order so the
-    // sequence is a property of the text, not of the traversal.
-    function matchedCalls(file, callees) {
+    // The configured name this call resolves to, or undefined.
+    function calleeOfCall(checker, call, entries) {
+        var sig = checker.getResolvedSignature(call);
+        var name = entryForDeclaration(entries, sig && sig.declaration);
+        if (name !== undefined) return name;
+        // Fallback: a source with type errors can leave the call without a
+        // resolved signature. The callee's own symbol still names it.
+        var sym = checker.getSymbolAtLocation(unwrapCallee(call.expression));
+        var decls = (sym && sym.getDeclarations()) || [];
+        for (var i = 0; i < decls.length; i++) {
+            name = entryForDeclaration(entries, decls[i]);
+            if (name !== undefined) return name;
+        }
+        return undefined;
+    }
+
+    // Every matched call in SOURCE ORDER: resolves to a configured declaration
+    // and carries at least one type argument. Sorted by start position rather
+    // than by visit order so the sequence is a property of the text, not of the
+    // traversal.
+    //
+    // A call written WITHOUT type arguments is not matched at all (schema-first
+    // authoring stays legal and consumes no ordinal). A call with MORE than one
+    // is matched and then refused by name below, rather than skipped in
+    // silence: there is no such signature in a sane SDK, but "we found your
+    // call and could not serialise it" must never be spelled as nothing.
+    function matchedCalls(file, checker, entries) {
         var found = [];
         function visit(node) {
-            if (ts.isCallExpression(node) && node.typeArguments && node.typeArguments.length === 1) {
-                var name = calleeName(node.expression);
-                if (name !== undefined && callees.indexOf(name) !== -1) {
-                    found.push({ node: node, callee: name, pos: node.getStart(file) });
+            if (ts.isCallExpression(node) && node.typeArguments && node.typeArguments.length > 0) {
+                var name = calleeOfCall(checker, node, entries);
+                if (name !== undefined) {
+                    found.push({
+                        node: node,
+                        callee: name,
+                        pos: node.getStart(file),
+                        typeArgumentCount: node.typeArguments.length,
+                    });
                 }
             }
             ts.forEachChild(node, visit);
@@ -918,13 +1012,17 @@
         var file = program.getSourceFile("/main.ts");
         if (!file) return { schemas: [], errors: [] };
         var checker = program.getTypeChecker();
-        var calls = matchedCalls(file, callees);
+        var calls = matchedCalls(file, checker, resolveCalleeTargets(program, callees));
         var schemas = [];
         var errors = [];
         for (var i = 0; i < calls.length; i++) {
             var call = calls[i];
             var line = file.getLineAndCharacterOfPosition(call.pos).line + 1;
             try {
+                if (call.typeArgumentCount !== 1) {
+                    fail("", "the call carries " + call.typeArgumentCount + " type arguments and " +
+                        "exactly one is required, so there is no single type to serialise");
+                }
                 var type = checker.getTypeFromTypeNode(call.node.typeArguments[0]);
                 var schema = schemaFromType(checker, type, "", false, []);
                 // `line` is a SIBLING of `schema`, never a member of it: the
