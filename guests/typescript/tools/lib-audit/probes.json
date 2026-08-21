@@ -12,7 +12,10 @@
     "          absent   - the engine does NOT have it; `expect` records how it fails",
     "  source  the JS/TS evaluated in the guest",
     "  expect  the exact value the guest must return",
-    "  check   the TypeScript the checker sees (no @ts-nocheck); defaults to `source`",
+    "  check   the TypeScript the checker sees (no @ts-nocheck); defaults to `source`.",
+    "          audit.php --parity ALSO evaluates it, so it must be runnable, not",
+    "          merely well-typed: a snippet that throws for its own reasons would",
+    "          read as a checker/engine parity breach.",
     "  note    anything the raw verdict does not say by itself"
   ],
   "probes": [
@@ -297,7 +300,7 @@
       "kind": "runtime",
       "source": "const b = new ArrayBuffer(8); const view = new Uint8Array(b); const c = b.transfer(); const d = new ArrayBuffer(8).transferToFixedLength(4); b.detached + ':' + c.byteLength + ':' + view.length + ':' + d.byteLength + ':' + new ArrayBuffer(4).detached",
       "expect": "true:8:0:4:false",
-      "check": "const b = new ArrayBuffer(8);\nb.transfer();\nb.transferToFixedLength(4);\nb.detached;"
+      "check": "const b = new ArrayBuffer(8);\nb.transfer();\nb.detached;\nnew ArrayBuffer(8).transferToFixedLength(4);"
     },
     {
       "id": "es2024.regexp.unicodeSets",

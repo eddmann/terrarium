@@ -1,18 +1,26 @@
 {
     "fixture": "tests/wasm/typescript_guest.wasm",
-    "fixtureSha256": "89f51d71ae9f9fcc883e79d4a52b3ed4fc2eb61422df27edd3f4c02bda362401",
+    "fixtureSha256": "a90fb9606b41fc7b97c5b13f5c5b52d84bc780276d159480c29b13abe518a357",
     "engine": "quickjs-ng v0.16.2",
     "typescript": "6.0.3",
     "currentPin": {
-        "target": "ES2020",
+        "target": "ES2024",
         "lib": [
-            "lib.es2020.d.ts"
+            "lib.es2024.d.ts"
         ]
     },
     "counts": {
         "pass": 32,
         "fail": 0,
         "absent": 9
+    },
+    "parity": {
+        "breaches": [],
+        "conservative": [
+            "ahead.sharedArrayBuffer.plain",
+            "ahead.array.fromAsync",
+            "ahead.explicitResourceManagement"
+        ]
     },
     "probes": [
         {
@@ -30,6 +38,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -47,6 +59,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -64,6 +80,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -82,6 +102,10 @@
                 "clean": true,
                 "diagnostics": []
             },
+            "parity": {
+                "verdict": "async-guard",
+                "evalThrew": "Terrarium\\GuestException: AsyncIncomplete: asynchronous guest code cannot complete: the program evaluated to a Promise, and the job queue is never drained here, so its continuation never ran. Write synchronous code \u2014 SDK calls return their values directly."
+            },
             "note": "existence only: settling it needs the job queue, which this host never drains (AsyncIncomplete)"
         },
         {
@@ -99,6 +123,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -116,6 +144,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -133,6 +165,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -150,6 +186,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -167,6 +207,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -184,6 +228,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -201,6 +249,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -218,6 +270,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             },
             "note": "no cause option leaves the property absent, as the spec requires"
         },
@@ -237,6 +293,10 @@
                 "clean": true,
                 "diagnostics": []
             },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
             "note": "also a SYNTAX gate: the `d` flag in a literal needs target >= ES2022 (TS1501)"
         },
         {
@@ -254,6 +314,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -271,6 +335,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -288,6 +356,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -305,6 +377,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -322,6 +398,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -339,6 +419,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -356,6 +440,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -373,6 +461,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -391,6 +483,10 @@
                 "clean": true,
                 "diagnostics": []
             },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
             "note": "must be the very first byte, so it cannot carry a preceding @ts-nocheck"
         },
         {
@@ -408,6 +504,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -425,6 +525,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -442,6 +546,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -460,6 +568,10 @@
                 "clean": true,
                 "diagnostics": []
             },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
+            },
             "note": "a lone surrogate becomes U+FFFD, per spec"
         },
         {
@@ -477,6 +589,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -494,6 +610,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             }
         },
         {
@@ -511,6 +631,10 @@
             "gateAtCurrentPin": {
                 "clean": true,
                 "diagnostics": []
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": null
             },
             "note": "also a SYNTAX gate: the `v` flag in a literal needs target >= ES2024 (TS1501)"
         },
@@ -541,6 +665,10 @@
                     }
                 ]
             },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. [+1 more error] (line 1)"
+            },
             "note": "PRE-EXISTING type/runtime mismatch: the ES2020 pin already declares Atomics, which the engine does not have at all"
         },
         {
@@ -569,6 +697,10 @@
                         "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
                     }
                 ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. [+1 more error] (line 1)"
             }
         },
         {
@@ -592,6 +724,10 @@
                         "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later."
                     }
                 ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. (line 1)"
             },
             "note": "HALF-WORKS: SharedArrayBuffer exists and the grow/growable/maxByteLength members exist, but a growable SAB can never be constructed in this build, so grow() can never succeed"
         },
@@ -617,6 +753,10 @@
                     }
                 ]
             },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2304: Cannot find name 'structuredClone'. (line 1)"
+            },
             "note": "absent from the engine AND from every bundled lib, so the two already agree; the raise cannot introduce it"
         },
         {
@@ -632,8 +772,18 @@
                 "threw": null
             },
             "gateAtCurrentPin": {
-                "clean": true,
-                "diagnostics": []
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TS2708",
+                        "line": 1,
+                        "message": "Cannot use namespace 'Intl' as a value."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. (line 1)"
             },
             "note": "PRE-EXISTING and NOT fixable at lib-file granularity: the Intl namespace is declared inside lib.es5.d.ts, which cannot be dropped. Unchanged by the raise; needs a stripped-lib variant of its own"
         },
@@ -653,11 +803,15 @@
                 "clean": false,
                 "diagnostics": [
                     {
-                        "code": "TS2550",
+                        "code": "TS2708",
                         "line": 1,
-                        "message": "Property 'ListFormat' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later."
+                        "message": "Cannot use namespace 'Intl' as a value."
                     }
                 ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. (line 1)"
             }
         },
         {
@@ -676,16 +830,20 @@
                 "clean": false,
                 "diagnostics": [
                     {
-                        "code": "TS2550",
+                        "code": "TS2708",
                         "line": 1,
-                        "message": "Property 'Segmenter' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later."
+                        "message": "Cannot use namespace 'Intl' as a value."
                     },
                     {
-                        "code": "TS2339",
+                        "code": "TS2708",
                         "line": 2,
-                        "message": "Property 'supportedValuesOf' does not exist on type 'typeof Intl'."
+                        "message": "Cannot use namespace 'Intl' as a value."
                     }
                 ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. [+1 more error] (line 1)"
             }
         },
         {
@@ -704,11 +862,15 @@
                 "clean": false,
                 "diagnostics": [
                     {
-                        "code": "TS2339",
+                        "code": "TS2708",
                         "line": 1,
-                        "message": "Property 'formatRange' does not exist on type 'NumberFormat'."
+                        "message": "Cannot use namespace 'Intl' as a value."
                     }
                 ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TS2708: Cannot use namespace 'Intl' as a value. (line 1)"
             }
         },
         {
@@ -733,6 +895,10 @@
                     }
                 ]
             },
+            "parity": {
+                "verdict": "conservative",
+                "evalThrew": "Terrarium\\GuestException: TS2583: Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later. (line 1)"
+            },
             "note": "the engine HAS it, but the proposal drops the declaration with the rest of the shared-memory chain: no Atomics, no workers, no growth, so it is an ArrayBuffer with a misleading name. Under-declaring is the safe direction"
         },
         {
@@ -756,6 +922,10 @@
                         "message": "Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later."
                     }
                 ]
+            },
+            "parity": {
+                "verdict": "conservative",
+                "evalThrew": "Terrarium\\GuestException: TS2550: Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later. (line 1)"
             },
             "note": "engine is AHEAD of the proposed lib: it exists but stays undeclared (async anyway, so unusable here). Under-declaring is the safe direction"
         },
@@ -786,6 +956,10 @@
                     }
                 ]
             },
+            "parity": {
+                "verdict": "conservative",
+                "evalThrew": "Terrarium\\GuestException: TS2318: Cannot find global type 'Disposable'. [+1 more error]"
+            },
             "note": "engine is AHEAD of the proposed lib; left undeclared deliberately (esnext is not a stable pin)"
         },
         {
@@ -801,8 +975,18 @@
                 "threw": null
             },
             "gateAtCurrentPin": {
-                "clean": true,
-                "diagnostics": []
+                "clean": false,
+                "diagnostics": [
+                    {
+                        "code": "TSEngineUnsupported",
+                        "line": 1,
+                        "message": "`accessor` class members are not supported: the sandbox engine (quickjs-ng v0.16.2) raises a SyntaxError on the `accessor` keyword, so this would type-check and then fail to parse at run time. Declare a private field with an explicit `get`/`set` pair instead."
+                    }
+                ]
+            },
+            "parity": {
+                "verdict": "agree",
+                "evalThrew": "Terrarium\\GuestException: TSEngineUnsupported: `accessor` class members are not supported: the sandbox engine (quickjs-ng v0.16.2) raises a SyntaxError on the `accessor` keyword, so this would type-check and then fail to parse at run time. Declare a private field with an explicit `get`/`set` pair instead. (line 1)"
             },
             "note": "PRE-EXISTING syntax mismatch, independent of this raise: the checker accepts `accessor` at ES2020 and at ES2024, ts-blank-space passes it through, and the engine rejects it with a SyntaxError"
         }
