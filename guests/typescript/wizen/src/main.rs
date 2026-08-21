@@ -30,7 +30,7 @@
 //! `random_get`, no filesystem, no environment, no args. Wizer's built-in
 //! `allow_wasi(true)` wires those to the real host, which makes the snapshot
 //! **non-reproducible**: QuickJS seeds each context's PRNG from the wall clock
-//! (`ctx->random_state = js__gettimeofday_us()` in `js_random_init`), so the
+//! (`ctx->random_state = js__gettimeofday_us()` in `JS_NewContext`), so the
 //! live 64-bit seed — plus any timestamp the bring-up happens to cache — is
 //! baked into the data segments. Two wizenings of the *same* base module
 //! differed in 22 bytes across three clusters, every one of them clock-derived.

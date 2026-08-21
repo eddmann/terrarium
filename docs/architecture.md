@@ -420,7 +420,7 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
    `Cargo.toml` is the source of truth); the committed fixtures are built from
    these pins.
    - **Boa** `0.20` (pure-Rust JS) on `wasm32-unknown-unknown`, no C toolchain.
-   - **QuickJS-ng** `v0.15.1` — JavaScript, compiled from C with the WASI SDK
+   - **QuickJS-ng** `v0.16.2` — JavaScript, compiled from C with the WASI SDK
      (reactor mode) behind the identical host ABI.
    - **RustPython** `0.5` (pure-Rust Python) on `wasm32-unknown-unknown`.
    - **PHP** `8.3.14` — real php-src via its embed SAPI (`php_embed_init` /
@@ -441,7 +441,7 @@ Each engine's build pipeline, toolchain, and upstream shims live in its own
      SAPI `ub_write` hook into `$out`; uncaught exceptions *and* fatal errors
      (`zend_first_try`/`zend_catch`) become the `$error` sentinel. Fibers
      compile but abort if used (real fibers need Asyncify).
-   - **TypeScript** — QuickJS-ng `v0.15.1` with the real TypeScript compiler
+   - **TypeScript** — QuickJS-ng `v0.16.2` with the real TypeScript compiler
      `6.0.3` (and Bloomberg's ts-blank-space `0.9.0`) embedded as
      **precompiled QuickJS bytecode**
      (a *native* `qjsc` from the same pinned quickjs-ng tree generates it —

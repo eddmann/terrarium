@@ -1,6 +1,6 @@
 # TypeScript guest — checked inside the sandbox
 
-[QuickJS-ng](https://github.com/quickjs-ng/quickjs) `v0.15.1` carrying the real
+[QuickJS-ng](https://github.com/quickjs-ng/quickjs) `v0.16.2` carrying the real
 [TypeScript compiler](https://github.com/microsoft/TypeScript) `6.0.3` (and
 Bloomberg's [ts-blank-space](https://github.com/bloomberg/ts-blank-space) `0.9.0`)
 embedded as **precompiled QuickJS bytecode**. Every eval is type-checked against
@@ -15,7 +15,7 @@ make typescript-guest      # WASI_SDK=/path/to/wasi-sdk   (and cargo, for Wizer)
 
 `build.sh` is a six-step pipeline:
 
-1. fetch quickjs-ng (`v0.15.1` — same pin as the [QuickJS guest](../quickjs/README.md);
+1. fetch quickjs-ng (`v0.16.2` — same pin as the [QuickJS guest](../quickjs/README.md);
    bytecode is version-locked)
 2. build a **native** `qjsc` from that tree
 3. fetch the pinned `typescript` + `ts-blank-space` npm tarballs
@@ -111,3 +111,12 @@ parse, check and type-erase source.
 - **libs** are the `lib.*.d.ts` chain minus the environments the sandbox doesn't
   have (`dom`, `webworker`, `scripthost`) — the type environment must equal the
   real execution environment.
+- The checker is pinned to **`target: ES2020` / `lib: ["lib.es2020.d.ts"]`**
+  (`driver.js`), which is deliberately narrower than the engine. QuickJS-ng runs
+  well ahead of that — `Object.groupBy`, `Iterator` helpers, `RegExp.escape`,
+  `Float16Array` and friends all exist at runtime — but the checker rejects them,
+  so an engine bump does **not** widen what submitted TypeScript may use. Anything
+  past ES2020 is reachable only via `@ts-nocheck`. Widening the surface is a
+  separate, deliberate change: raise the `target`/`lib` pin in `driver.js` (and
+  the `.d.ts` the runtime is described by) rather than expecting a QuickJS-ng
+  upgrade to do it.

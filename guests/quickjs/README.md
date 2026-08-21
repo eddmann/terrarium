@@ -1,6 +1,6 @@
 # QuickJS guest — JavaScript
 
-[QuickJS-ng](https://github.com/quickjs-ng/quickjs) `v0.15.1`, compiled from C to
+[QuickJS-ng](https://github.com/quickjs-ng/quickjs) `v0.16.2`, compiled from C to
 `wasm32-wasip1` (reactor mode) via the WASI SDK. This is the **reference guest**:
 the smallest complete implementation of the [guest contract](../../docs/architecture.md#6-the-host-abi),
 and the base the PHP and TypeScript guests build on.
@@ -11,7 +11,7 @@ and the base the PHP and TypeScript guests build on.
 make quickjs-guest      # WASI_SDK=/path/to/wasi-sdk
 ```
 
-`build.sh` downloads the pinned quickjs-ng source (`v0.15.1`, not vendored),
+`build.sh` downloads the pinned quickjs-ng source (`v0.16.2`, not vendored),
 compiles `quickjs_guest.c` + the engine (`quickjs.c`, `libregexp.c`,
 `libunicode.c`, `dtoa.c`) with a 1 MiB linker stack, and copies the result to
 `tests/wasm/quickjs_guest.wasm` (the committed fixture). Needs a

@@ -52,7 +52,7 @@ set -euo pipefail
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk}"
 WASI_SDK_VERSION="${WASI_SDK_VERSION:-25.0}"
 WASI_SDK_CLANG_VERSION="${WASI_SDK_CLANG_VERSION:-19.1.5}"
-QJS_VERSION="${QJS_VERSION:-v0.15.1}"
+QJS_VERSION="${QJS_VERSION:-v0.16.2}"
 TS_VERSION="${TS_VERSION:-6.0.3}"
 TBS_VERSION="${TBS_VERSION:-0.9.0}"
 HOST_CC="${HOST_CC:-cc}"
@@ -111,9 +111,16 @@ fi
 # --- 2. native qjsc (must be the same tree as the wasm engine) --------------
 # -D_GNU_SOURCE: quickjs-libc.c reaches for `environ`, which glibc only declares
 # under that feature macro (the WASI build gets it from wasi-libc regardless).
-if [ ! -x "$BUILD/qjsc" ]; then
+#
+# The binary is cached under the version it was built from. Keying on
+# QJS_VERSION is load-bearing, not cosmetic: qjsc bytecode is version-locked (the
+# v0.15.1 -> v0.16.2 bump moved BC_VERSION 26 -> 27), so a qjsc left over from the
+# previous pin would emit bytecode the freshly built engine refuses to read --
+# and the failure would surface only at runtime, inside the wasm.
+QJSC="$BUILD/qjsc-${QJS_VERSION}"
+if [ ! -x "$QJSC" ]; then
     echo "Building native qjsc ..."
-    "$HOST_CC" -O2 -D_GNU_SOURCE -I"$QJS" -o "$BUILD/qjsc" \
+    "$HOST_CC" -O2 -D_GNU_SOURCE -I"$QJS" -o "$QJSC" \
         "$QJS/qjsc.c" "$QJS/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" \
         "$QJS/dtoa.c" "$QJS/quickjs-libc.c" -lm -lpthread
 fi
@@ -173,10 +180,10 @@ echo "Generating tsblank.js ..."
 
 # --- 4c. bytecode ------------------------------------------------------------
 echo "Compiling payloads to QuickJS bytecode ..."
-"$BUILD/qjsc" -s -s -C -N qjsc_typescript -o "$BUILD/typescript_bc.c" "$TSPKG/lib/typescript.js"
-"$BUILD/qjsc" -s -s -C -N qjsc_libs       -o "$BUILD/libs_bc.c"       "$BUILD/libs.js"
-"$BUILD/qjsc" -s -s -C -N qjsc_tsblank    -o "$BUILD/tsblank_bc.c"    "$BUILD/tsblank.js"
-"$BUILD/qjsc" -s -s -C -N qjsc_driver     -o "$BUILD/driver_bc.c"     "$HERE/driver.js"
+"$QJSC" -s -s -C -N qjsc_typescript -o "$BUILD/typescript_bc.c" "$TSPKG/lib/typescript.js"
+"$QJSC" -s -s -C -N qjsc_libs       -o "$BUILD/libs_bc.c"       "$BUILD/libs.js"
+"$QJSC" -s -s -C -N qjsc_tsblank    -o "$BUILD/tsblank_bc.c"    "$BUILD/tsblank.js"
+"$QJSC" -s -s -C -N qjsc_driver     -o "$BUILD/driver_bc.c"     "$HERE/driver.js"
 
 # --- 5. the base guest wasm ---------------------------------------------------
 # The checker recurses deeply: 12 MiB of linker stack covers the compiler

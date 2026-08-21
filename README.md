@@ -154,7 +154,7 @@ Five are bundled; the same bridge serves any language that targets WASM. Each
 guest pins the upstream version it tracks; the committed fixtures are built from
 these. See each guest's README for build details and internals.
 
-- [**QuickJS-ng**](guests/quickjs/README.md) `v0.15.1` — JavaScript, C via the
+- [**QuickJS-ng**](guests/quickjs/README.md) `v0.16.2` — JavaScript, C via the
   WASI SDK (the reference guest).
 - [**Boa**](guests/boa/README.md) `0.20` — JavaScript, pure Rust (no C toolchain).
 - [**RustPython**](guests/rustpython/README.md) `0.5` — Python, pure Rust.
