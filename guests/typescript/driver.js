@@ -578,11 +578,25 @@
     }
 
     // The literal *value* of a literal type, or undefined for anything else.
-    function literalValue(checker, type) {
+    //
+    // A numeric literal the source spells beyond the double range (`1e309`)
+    // reaches here as Infinity, which JSON has no form for: `JSON.stringify`
+    // turns it into the text `null`, so `ctx.agent<1e309>()` used to bake
+    // `{"const":null}` -- a schema that silently says something the author
+    // never wrote. Refused with the member path instead.
+    function literalValue(checker, type, path) {
         var f = type.flags;
         if (f & ts.TypeFlags.EnumLike) return undefined;      // TS enums are erased, never literals here
         if (f & ts.TypeFlags.StringLiteral) return type.value;
-        if (f & ts.TypeFlags.NumberLiteral) return type.value;
+        if (f & ts.TypeFlags.NumberLiteral) {
+            if (!isFinite(type.value)) {
+                fail(path, "the numeric literal type `" + checker.typeToString(type) + "` is not a " +
+                    "finite JSON number (the literal overflows to " +
+                    (type.value > 0 ? "Infinity" : "-Infinity") + "), so it has no JSON Schema " +
+                    "form: use a literal inside the double range, or `number`");
+            }
+            return type.value;
+        }
         if (f & ts.TypeFlags.BooleanLiteral) return type.intrinsicName === "true";
         return undefined;
     }
@@ -715,7 +729,7 @@
             var names = [];
             var allLiteral = true;
             for (var j = 0; j < rest.length; j++) {
-                var v = literalValue(checker, rest[j]);
+                var v = literalValue(checker, rest[j], path);
                 if (v === undefined) { allLiteral = false; break; }
                 values.push(jsonScalar(v));
                 names.push(literalTypeName(v));
@@ -810,7 +824,7 @@
         // recognised before the union branch or it would surface as an enum.
         if (f & F.Boolean) return scalarSchema("boolean");
         if (f & (F.StringLiteral | F.NumberLiteral | F.BooleanLiteral)) {
-            return schemaOf("const", '{"const":' + jsonScalar(literalValue(checker, type)) + "}");
+            return schemaOf("const", '{"const":' + jsonScalar(literalValue(checker, type, path)) + "}");
         }
         if (f & F.String) return scalarSchema("string");
         // JSON Schema's `integer` is a *narrower* claim than TypeScript's

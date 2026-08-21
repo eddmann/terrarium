@@ -456,6 +456,20 @@ check('a matched call with the wrong arity of type arguments errors loudly', fun
     contains($errors[0]['message'], '2 type arguments');
 });
 
+echo "\nnumeric literal types JSON cannot carry\n";
+// `1e309` is Infinity by the time the checker sees it, and JSON.stringify turns
+// that into the text `null` — so this used to bake `{"const":null}`: a schema
+// asserting something the author never wrote.
+$rejects('a numeric literal beyond the double range', '1e309', '<type argument>', 'not a finite JSON number');
+$rejects('the same, negative', '-1e400', '<type argument>', 'not a finite JSON number');
+$rejects('...and inside a literal union', '{ n: 1e309 | 2 }', 'n', 'not a finite JSON number');
+check('a finite literal at the edge is still fine', function () use ($wasm) {
+    // The refusal is about Infinity, not about magnitude.
+    $out = guest($wasm)->analyze(program('1e308'));
+    eq([], schemaErrors($out));
+    eq('{"const":1e+308}', $out['schemas'][0]['schema']);
+});
+
 echo "\nwhat is NOT extracted\n";
 check('a matched callee without a type argument is untouched', function () use ($wasm) {
     // Schema-first authoring stays legal: the guest extracts, it does not police
