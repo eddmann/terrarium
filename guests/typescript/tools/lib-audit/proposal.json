@@ -1,0 +1,1888 @@
+{
+  "typescript": "6.0.3",
+  "pins": {
+    "current": {
+      "target": "ES2020",
+      "lib": [
+        "lib.es2020.d.ts"
+      ],
+      "libOverrides": []
+    },
+    "proposed": {
+      "target": "ES2024",
+      "lib": [
+        "lib.es2024.d.ts"
+      ],
+      "libOverrides": [
+        "lib.es2016.intl.d.ts",
+        "lib.es2017.intl.d.ts",
+        "lib.es2017.sharedmemory.d.ts",
+        "lib.es2018.intl.d.ts",
+        "lib.es2019.intl.d.ts",
+        "lib.es2020.intl.d.ts",
+        "lib.es2020.sharedmemory.d.ts",
+        "lib.es2021.intl.d.ts",
+        "lib.es2022.intl.d.ts",
+        "lib.es2023.intl.d.ts",
+        "lib.es2024.sharedmemory.d.ts"
+      ]
+    },
+    "proposed-no-exclusions": {
+      "target": "ES2024",
+      "lib": [
+        "lib.es2024.d.ts"
+      ],
+      "libOverrides": []
+    },
+    "proposed-new-lies-only": {
+      "target": "ES2024",
+      "lib": [
+        "lib.es2024.d.ts"
+      ],
+      "libOverrides": [
+        "lib.es2021.intl.d.ts",
+        "lib.es2022.intl.d.ts",
+        "lib.es2023.intl.d.ts",
+        "lib.es2024.sharedmemory.d.ts"
+      ]
+    }
+  },
+  "replicaFidelity": {
+    "total": 41,
+    "identical": 41,
+    "drift": []
+  },
+  "probes": [
+    {
+      "id": "es2021.string.replaceAll",
+      "es": "ES2021",
+      "lib": "lib.es2021.string.d.ts",
+      "feature": "String.prototype.replaceAll",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'replaceAll' does not exist on type '\"ab\"'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.string.replaceAll.globalRegExp",
+      "es": "ES2021",
+      "lib": "lib.es2021.string.d.ts",
+      "feature": "String.prototype.replaceAll with a global RegExp",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'replaceAll' does not exist on type '\"aXa\"'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.string.replaceAll.nonGlobalThrows",
+      "es": "ES2021",
+      "lib": "lib.es2021.string.d.ts",
+      "feature": "String.prototype.replaceAll rejects a non-global RegExp (spec step 2)",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'replaceAll' does not exist on type '\"aa\"'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.promise.any",
+      "es": "ES2021",
+      "lib": "lib.es2021.promise.d.ts",
+      "feature": "Promise.any",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'any' does not exist on type 'PromiseConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.aggregateError",
+      "es": "ES2021",
+      "lib": "lib.es2021.promise.d.ts",
+      "feature": "AggregateError with .errors",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'AggregateError'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.weakRef.deref",
+      "es": "ES2021",
+      "lib": "lib.es2021.weakref.d.ts",
+      "feature": "WeakRef.prototype.deref",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'WeakRef'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.finalizationRegistry",
+      "es": "ES2021",
+      "lib": "lib.es2021.weakref.d.ts",
+      "feature": "FinalizationRegistry register/unregister",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'FinalizationRegistry'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.array.at",
+      "es": "ES2022",
+      "lib": "lib.es2022.array.d.ts",
+      "feature": "Array.prototype.at (negative index)",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'at' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.typedArray.at",
+      "es": "ES2022",
+      "lib": "lib.es2022.array.d.ts",
+      "feature": "%TypedArray%.prototype.at, every element kind",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'at' does not exist on type 'Int32Array<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.string.at",
+      "es": "ES2022",
+      "lib": "lib.es2022.string.d.ts",
+      "feature": "String.prototype.at",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'at' does not exist on type '\"abc\"'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.object.hasOwn",
+      "es": "ES2022",
+      "lib": "lib.es2022.object.d.ts",
+      "feature": "Object.hasOwn (own only, not inherited)",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'hasOwn' does not exist on type 'ObjectConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.error.cause",
+      "es": "ES2022",
+      "lib": "lib.es2022.error.d.ts",
+      "feature": "Error cause option",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2554,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2554",
+              "message": "Expected 0-1 arguments, but got 2.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'cause' does not exist on type 'Error'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.regexp.indices",
+      "es": "ES2022",
+      "lib": "lib.es2022.regexp.d.ts",
+      "feature": "RegExp `d` flag: hasIndices + match indices",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS1501,TS2339,TS1501,TS2339",
+          "diagnostics": [
+            {
+              "code": "TS1501",
+              "message": "This regular expression flag is only available when targeting 'es2022' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2339",
+              "message": "Property 'indices' does not exist on type 'RegExpExecArray'.",
+              "line": 1
+            },
+            {
+              "code": "TS1501",
+              "message": "This regular expression flag is only available when targeting 'es2022' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2339",
+              "message": "Property 'hasIndices' does not exist on type 'RegExp'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.syntax.classFields",
+      "es": "ES2022",
+      "lib": "(syntax; gated by `target`, not by `lib`)",
+      "feature": "class instance + static fields",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.syntax.staticBlock",
+      "es": "ES2022",
+      "lib": "(syntax; gated by `target`, not by `lib`)",
+      "feature": "class static initialization block",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2022.syntax.privateNames",
+      "es": "ES2022",
+      "lib": "(syntax; gated by `target`, not by `lib`)",
+      "feature": "#private field, #private method, `#x in obj`",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2021.syntax.numericSeparators",
+      "es": "ES2021",
+      "lib": "(syntax; allowed already at the current pin)",
+      "feature": "numeric separators",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2023.array.findLast",
+      "es": "ES2023",
+      "lib": "lib.es2023.array.d.ts",
+      "feature": "Array.prototype.findLast / findLastIndex",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'findLast' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'findLastIndex' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 2
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2023.array.changeByCopy",
+      "es": "ES2023",
+      "lib": "lib.es2023.array.d.ts",
+      "feature": "Array toSorted / toReversed / toSpliced / with (copying, original untouched)",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550,TS7006,TS7006,TS2550,TS2550,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'toSorted' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 2
+            },
+            {
+              "code": "TS7006",
+              "message": "Parameter 'a' implicitly has an 'any' type.",
+              "line": 2
+            },
+            {
+              "code": "TS7006",
+              "message": "Parameter 'b' implicitly has an 'any' type.",
+              "line": 2
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'toReversed' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 3
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'toSpliced' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 4
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'with' does not exist on type 'number[]'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 5
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2023.typedArray.changeByCopy",
+      "es": "ES2023",
+      "lib": "lib.es2023.array.d.ts",
+      "feature": "%TypedArray% findLast / findLastIndex / toSorted / toReversed / with",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550,TS2550,TS2550,TS2550,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'findLast' does not exist on type 'Int32Array<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 2
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'findLastIndex' does not exist on type 'Int32Array<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 3
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'toSorted' does not exist on type 'Int32Array<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 4
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'toReversed' does not exist on type 'Int32Array<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 5
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'with' does not exist on type 'Int32Array<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2023' or later.",
+              "line": 6
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2023.collection.symbolKeys",
+      "es": "ES2023",
+      "lib": "lib.es2023.collection.d.ts",
+      "feature": "symbols as WeakMap/WeakSet/WeakRef keys (registered symbols still rejected)",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2344,TS2344",
+          "diagnostics": [
+            {
+              "code": "TS2344",
+              "message": "Type 'symbol' does not satisfy the constraint 'object'.",
+              "line": 2
+            },
+            {
+              "code": "TS2344",
+              "message": "Type 'symbol' does not satisfy the constraint 'object'.",
+              "line": 4
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2023.syntax.hashbang",
+      "es": "ES2023",
+      "lib": "(syntax; hashbang grammar)",
+      "feature": "hashbang comment as the first line",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.object.groupBy",
+      "es": "ES2024",
+      "lib": "lib.es2024.object.d.ts",
+      "feature": "Object.groupBy (null-prototype result)",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'groupBy' does not exist on type 'ObjectConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.collection.mapGroupBy",
+      "es": "ES2024",
+      "lib": "lib.es2024.collection.d.ts",
+      "feature": "Map.groupBy",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'groupBy' does not exist on type 'MapConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.promise.withResolvers",
+      "es": "ES2024",
+      "lib": "lib.es2024.promise.d.ts",
+      "feature": "Promise.withResolvers",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'withResolvers' does not exist on type 'PromiseConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.string.wellFormed",
+      "es": "ES2024",
+      "lib": "lib.es2024.string.d.ts",
+      "feature": "String isWellFormed / toWellFormed",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'isWellFormed' does not exist on type '\"a\"'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'toWellFormed' does not exist on type '\"a\"'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 2
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.arrayBuffer.resizable",
+      "es": "ES2024",
+      "lib": "lib.es2024.arraybuffer.d.ts",
+      "feature": "resizable ArrayBuffer: resizable / maxByteLength / resize",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2554,TS2550,TS2550,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2554",
+              "message": "Expected 0-1 arguments, but got 2.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'resize' does not exist on type 'ArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 2
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'resizable' does not exist on type 'ArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 3
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'maxByteLength' does not exist on type 'ArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 4
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.arrayBuffer.transfer",
+      "es": "ES2024",
+      "lib": "lib.es2024.arraybuffer.d.ts",
+      "feature": "ArrayBuffer transfer / transferToFixedLength / detached",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550,TS2550,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'transfer' does not exist on type 'ArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 2
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'transferToFixedLength' does not exist on type 'ArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 3
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'detached' does not exist on type 'ArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 4
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "es2024.regexp.unicodeSets",
+      "es": "ES2024",
+      "lib": "lib.es2024.regexp.d.ts",
+      "feature": "RegExp `v` flag: unicodeSets, set difference/intersection, string properties",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS1501,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS1501",
+              "message": "This regular expression flag is only available when targeting 'es2024' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'unicodeSets' does not exist on type 'RegExp'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 3
+            }
+          ]
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "absent.atomics",
+      "es": "ES2017 (already declared at the current pin)",
+      "lib": "lib.es2017.sharedmemory.d.ts",
+      "feature": "Atomics",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2583,TS2583",
+          "diagnostics": [
+            {
+              "code": "TS2583",
+              "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2583",
+              "message": "Cannot find name 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later.",
+              "line": 2
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "absent.atomics.waitAsync",
+      "es": "ES2024",
+      "lib": "lib.es2024.sharedmemory.d.ts",
+      "feature": "Atomics.waitAsync",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'waitAsync' does not exist on type 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2583,TS2583",
+          "diagnostics": [
+            {
+              "code": "TS2583",
+              "message": "Cannot find name 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2583",
+              "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'waitAsync' does not exist on type 'Atomics'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "absent.sharedArrayBuffer.growable",
+      "es": "ES2024",
+      "lib": "lib.es2024.sharedmemory.d.ts",
+      "feature": "growable SharedArrayBuffer (grow / growable / maxByteLength)",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2554,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2554",
+              "message": "Expected 0-1 arguments, but got 2.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'grow' does not exist on type 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2583",
+          "diagnostics": [
+            {
+              "code": "TS2583",
+              "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2554,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2554",
+              "message": "Expected 0-1 arguments, but got 2.",
+              "line": 1
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'grow' does not exist on type 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2024' or later.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "absent.structuredClone",
+      "es": "(HTML, not ECMAScript)",
+      "lib": "lib.dom.d.ts / lib.webworker.d.ts (never bundled)",
+      "feature": "structuredClone",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'structuredClone'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'structuredClone'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'structuredClone'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2304",
+          "diagnostics": [
+            {
+              "code": "TS2304",
+              "message": "Cannot find name 'structuredClone'.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "residual.intl.core",
+      "es": "ES5 (already declared at the current pin)",
+      "lib": "lib.es5.d.ts (the `declare namespace Intl` block)",
+      "feature": "Intl.NumberFormat / Intl.DateTimeFormat / Intl.Collator",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "absent.intl.listFormat",
+      "es": "ES2021",
+      "lib": "lib.es2021.intl.d.ts",
+      "feature": "Intl.ListFormat",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'ListFormat' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'ListFormat' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'ListFormat' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2021' or later.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "absent.intl.segmenter",
+      "es": "ES2022",
+      "lib": "lib.es2022.intl.d.ts",
+      "feature": "Intl.Segmenter / Intl.supportedValuesOf",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550,TS2339",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'Segmenter' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2339",
+              "message": "Property 'supportedValuesOf' does not exist on type 'typeof Intl'.",
+              "line": 2
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2550,TS2339",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'Segmenter' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2339",
+              "message": "Property 'supportedValuesOf' does not exist on type 'typeof Intl'.",
+              "line": 2
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2550,TS2339",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'Segmenter' does not exist on type 'typeof Intl'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2022' or later.",
+              "line": 1
+            },
+            {
+              "code": "TS2339",
+              "message": "Property 'supportedValuesOf' does not exist on type 'typeof Intl'.",
+              "line": 2
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "absent.intl.numberFormatV3",
+      "es": "ES2023",
+      "lib": "lib.es2023.intl.d.ts",
+      "feature": "Intl.NumberFormat v3 (formatRange)",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2339",
+          "diagnostics": [
+            {
+              "code": "TS2339",
+              "message": "Property 'formatRange' does not exist on type 'NumberFormat'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2339",
+          "diagnostics": [
+            {
+              "code": "TS2339",
+              "message": "Property 'formatRange' does not exist on type 'NumberFormat'.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2339",
+          "diagnostics": [
+            {
+              "code": "TS2339",
+              "message": "Property 'formatRange' does not exist on type 'NumberFormat'.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ahead.sharedArrayBuffer.plain",
+      "es": "ES2017",
+      "lib": "lib.es2017.sharedmemory.d.ts (excluded by the proposal)",
+      "feature": "plain (non-growable) SharedArrayBuffer",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2583",
+          "diagnostics": [
+            {
+              "code": "TS2583",
+              "message": "Cannot find name 'SharedArrayBuffer'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2017' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    },
+    {
+      "id": "ahead.array.fromAsync",
+      "es": "ESNext",
+      "lib": "lib.esnext.array.d.ts (outside the proposed chain)",
+      "feature": "Array.fromAsync",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2550",
+              "message": "Property 'fromAsync' does not exist on type 'ArrayConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "ahead.explicitResourceManagement",
+      "es": "ESNext",
+      "lib": "lib.esnext.disposable.d.ts (outside the proposed chain)",
+      "feature": "`using` declarations + Symbol.dispose",
+      "engine": "implemented",
+      "pins": {
+        "current": {
+          "clean": false,
+          "codes": "TS2318,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2318",
+              "message": "Cannot find global type 'Disposable'."
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'dispose' does not exist on type 'SymbolConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed": {
+          "clean": false,
+          "codes": "TS2318,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2318",
+              "message": "Cannot find global type 'Disposable'."
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'dispose' does not exist on type 'SymbolConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-no-exclusions": {
+          "clean": false,
+          "codes": "TS2318,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2318",
+              "message": "Cannot find global type 'Disposable'."
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'dispose' does not exist on type 'SymbolConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        },
+        "proposed-new-lies-only": {
+          "clean": false,
+          "codes": "TS2318,TS2550",
+          "diagnostics": [
+            {
+              "code": "TS2318",
+              "message": "Cannot find global type 'Disposable'."
+            },
+            {
+              "code": "TS2550",
+              "message": "Property 'dispose' does not exist on type 'SymbolConstructor'. Do you need to change your target library? Try changing the 'lib' compiler option to 'esnext' or later.",
+              "line": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mismatch.accessorKeyword",
+      "es": "ES2022 decorators (auto-accessors)",
+      "lib": "(syntax; the checker accepts it at every target)",
+      "feature": "`accessor` class fields",
+      "engine": "absent-as-expected",
+      "pins": {
+        "current": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-no-exclusions": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        },
+        "proposed-new-lies-only": {
+          "clean": true,
+          "codes": "clean",
+          "diagnostics": []
+        }
+      }
+    }
+  ],
+  "controls": [
+    {
+      "label": "plain typed code",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "generics + interfaces",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "SDK call, correct types",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "SDK call, wrong argument type -> TS2345",
+      "before": "TS2345",
+      "after": "TS2345",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2345",
+          "message": "Argument of type 'string' is not assignable to parameter of type 'number'.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "unknown SDK member -> TS2339",
+      "before": "TS2339",
+      "after": "TS2339",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2339",
+          "message": "Property 'missing' does not exist on type '{ name: string; roles: string[]; }'.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "unknown global stays unknown -> TS2304",
+      "before": "TS2304",
+      "after": "TS2304",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2304",
+          "message": "Cannot find name 'fetch'.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "structuredClone stays unknown -> TS2304",
+      "before": "TS2304",
+      "after": "TS2304",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2304",
+          "message": "Cannot find name 'structuredClone'.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "console is declared by RUNTIME_DTS",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "strict mode still on -> TS2322",
+      "before": "TS2322",
+      "after": "TS2322",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2322",
+          "message": "Type 'number' is not assignable to type 'string'.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "implicit any still reported -> TS7006",
+      "before": "TS7006",
+      "after": "TS7006",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS7006",
+          "message": "Parameter 'x' implicitly has an 'any' type.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "async still type-checks clean (sync_only is a separate walk)",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "DOM stays out of the world -> TS2584",
+      "before": "TS2584",
+      "after": "TS2584",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2584",
+          "message": "Cannot find name 'document'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "Node globals stay out of the world -> TS2591",
+      "before": "TS2591",
+      "after": "TS2591",
+      "unchanged": true,
+      "diagnostics": [
+        {
+          "code": "TS2591",
+          "message": "Cannot find name 'process'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "label": "Intl core: unchanged by the raise (declared in lib.es5, engine lacks it)",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "toLocaleString keeps working (it exists, locale-blind)",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    },
+    {
+      "label": "localeCompare keeps working",
+      "before": "clean",
+      "after": "clean",
+      "unchanged": true,
+      "diagnostics": []
+    }
+  ],
+  "disagreementsUnderProposedPin": []
+}
