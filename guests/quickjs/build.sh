@@ -6,38 +6,27 @@
 # Downloads quickjs-ng sources (not vendored) and compiles them + the shim into
 # tests/wasm/quickjs_guest.wasm. Requires a WASI SDK: https://github.com/WebAssembly/wasi-sdk
 #
-# QJS_VERSION is a *shared* pin with the TypeScript guest: that guest embeds the
-# TypeScript compiler as qjsc bytecode, and the bytecode format is version-locked
-# (v0.15.1 emitted BC_VERSION 26, v0.16.2 emits 27), so the two must move together.
+# The quickjs-ng pin, its checksum, and the fetch itself live in
+# ../pinned-sources.sh — a *shared* pin with the TypeScript guest, because that
+# guest embeds the TypeScript compiler as qjsc bytecode and the bytecode format
+# is version-locked (v0.15.1 emitted BC_VERSION 26, v0.16.2 emits 27), so the
+# two must move together. Whichever way the sources arrive (release tarball, or
+# a git clone when a proxy 403s the codeload redirect), the extracted tree is
+# verified against the pinned digest before anything is compiled.
 set -euo pipefail
 
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk}"
-QJS_VERSION="${QJS_VERSION:-v0.16.2}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=../pinned-sources.sh
+. "$HERE/../pinned-sources.sh"
 BUILD="$HERE/build"
 QJS="$BUILD/quickjs-${QJS_VERSION}"
 
 CLANG="$WASI_SDK/bin/clang"
 [ -x "$CLANG" ] || { echo "WASI SDK clang not found at $CLANG (set WASI_SDK)"; exit 1; }
 
-# Tarball first, git clone as the fallback: proxies commonly 403 the codeload
-# redirect while allowing git over HTTPS. Both yield the same tree at the tag,
-# and the .git directory is dropped so they stay interchangeable. (Same fetch
-# as the TypeScript guest's build.sh.)
-if [ ! -d "$QJS" ]; then
-    echo "Fetching quickjs-ng $QJS_VERSION ..."
-    rm -rf "$QJS.partial"
-    mkdir -p "$QJS.partial"
-    if ! curl -fsSL "https://github.com/quickjs-ng/quickjs/archive/refs/tags/${QJS_VERSION}.tar.gz" \
-        | tar xz -C "$QJS.partial" --strip-components=1; then
-        echo "  tarball fetch failed, falling back to git clone ..."
-        rm -rf "$QJS.partial"
-        git clone --quiet --depth 1 --branch "$QJS_VERSION" \
-            https://github.com/quickjs-ng/quickjs "$QJS.partial"
-        rm -rf "$QJS.partial/.git"
-    fi
-    mv "$QJS.partial" "$QJS"
-fi
+mkdir -p "$BUILD"
+fetch_quickjs "$QJS"
 
 echo "Compiling quickjs_guest.wasm ..."
 "$CLANG" \

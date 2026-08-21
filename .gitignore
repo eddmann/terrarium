@@ -9,7 +9,12 @@
 /guests/typescript/typescript_guest.wasm
 /guests/typescript/wizen/target
 # The root Cargo.lock is tracked (reproducible extension builds + cargo audit in
-# CI). The guest crates are build-time wasm tooling — their lockfiles stay out.
+# CI). The guest crates are build-time wasm tooling — their lockfiles stay out,
+# with one deliberate exception.
 /guests/boa/Cargo.lock
 /guests/rustpython/Cargo.lock
-/guests/typescript/wizen/Cargo.lock
+# wizen/ is that exception. It runs the LAST step of the TypeScript guest build,
+# and the fixture is claimed to be byte-for-byte reproducible on a pinned
+# toolchain. An unlocked Wizer (and the Wasmtime it pulls in) can resolve
+# differently on another machine or on another day, which would make the claim
+# unearned. Tracked so it is earned — and so `cargo audit` has something to read.

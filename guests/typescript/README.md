@@ -38,16 +38,36 @@ rm -f build/*_bc.c build/tsblank.js build/libs.js build/*.wasm
 ./build.sh && sha256sum ../../tests/wasm/typescript_guest.wasm
 ```
 
-Three things hold that up:
+Five things hold that up, and every one is enforced by the build rather than
+merely intended:
 
 - **The WASI SDK is pinned.** `WASI_SDK_VERSION` (default `25.0`) and
   `WASI_SDK_CLANG_VERSION` (default `19.1.5`) are asserted against
   `$WASI_SDK/VERSION` and `clang --version` before anything is compiled; a
   mismatch aborts, naming the release to install. Codegen differs between clang
   releases, so an unpinned compiler quietly breaks byte-stability.
+- **Every fetched source is checksum-verified**, and a mismatch is a hard
+  failure. The pins live in [`guests/pinned-sources.sh`](../pinned-sources.sh).
+  The `typescript` and `ts-blank-space` npm tarballs are pinned by sha256 (an
+  npm `.tgz` is content-addressed and immutable). quickjs-ng is pinned by a
+  digest over the *extracted tree* — a sorted manifest of the sha256 of every
+  top-level `.c`/`.h`, which is exactly the set the build compiles — because a
+  **generated** GitHub archive tarball is not guaranteed byte-stable and pinning
+  its hash would pin the wrong thing. The git-clone fallback additionally
+  asserts the tag resolves to the pinned commit before `.git` is dropped, so
+  that path is verified twice, independently.
+- **The build's own tool is locked.** `wizen/Cargo.lock` is committed (the
+  repository `.gitignore` carries an explicit exception for it), so the Wizer
+  step resolves the same dependency graph everywhere.
 - **Wizer runs against a deterministic WASI** — see below.
 - **Payload generation is order-stable** (the lib map comes from a sorted
-  directory listing).
+  directory listing and is serialised with sorted keys).
+
+What is *not* claimed: that a different clang, a different Rust toolchain, or a
+moved upstream tag reproduces the committed bytes. The claim is that the pinned
+inputs are verified to be the pinned inputs, and that on the pinned toolchain
+the output is stable — which is why each of those checks aborts the build rather
+than printing a warning.
 
 Two smaller build-environment notes: the native `qjsc` is compiled with
 `-D_GNU_SOURCE`, which glibc requires for the `environ` declaration

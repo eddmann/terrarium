@@ -52,11 +52,11 @@ set -euo pipefail
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk}"
 WASI_SDK_VERSION="${WASI_SDK_VERSION:-25.0}"
 WASI_SDK_CLANG_VERSION="${WASI_SDK_CLANG_VERSION:-19.1.5}"
-QJS_VERSION="${QJS_VERSION:-v0.16.2}"
-TS_VERSION="${TS_VERSION:-6.0.3}"
-TBS_VERSION="${TBS_VERSION:-0.9.0}"
 HOST_CC="${HOST_CC:-cc}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+# Third-party pins + their checksums, shared with the plain QuickJS guest.
+# shellcheck source=../pinned-sources.sh
+. "$HERE/../pinned-sources.sh"
 BUILD="$HERE/build"
 QJS="$BUILD/quickjs-${QJS_VERSION}"
 
@@ -91,22 +91,9 @@ sdk_version="$(head -n 1 "$WASI_SDK/VERSION" | tr -d '[:space:]')"
 mkdir -p "$BUILD"
 
 # --- 1. quickjs-ng sources (shared pin with quickjs-guest) ------------------
-# Tarball first, git clone as the fallback (see the header): the two produce the
-# same tree, and the .git directory is dropped so they stay interchangeable.
-if [ ! -d "$QJS" ]; then
-    echo "Fetching quickjs-ng $QJS_VERSION ..."
-    rm -rf "$QJS.partial"
-    mkdir -p "$QJS.partial"
-    if ! curl -fsSL "https://github.com/quickjs-ng/quickjs/archive/refs/tags/${QJS_VERSION}.tar.gz" \
-        | tar xz -C "$QJS.partial" --strip-components=1; then
-        echo "  tarball fetch failed, falling back to git clone ..."
-        rm -rf "$QJS.partial"
-        git clone --quiet --depth 1 --branch "$QJS_VERSION" \
-            https://github.com/quickjs-ng/quickjs "$QJS.partial"
-        rm -rf "$QJS.partial/.git"
-    fi
-    mv "$QJS.partial" "$QJS"
-fi
+# Tarball first, git clone as the fallback (see the header); either way the
+# extracted tree is verified against the pinned digest before use.
+fetch_quickjs "$QJS"
 
 # --- 2. native qjsc (must be the same tree as the wasm engine) --------------
 # -D_GNU_SOURCE: quickjs-libc.c reaches for `environ`, which glibc only declares
@@ -126,20 +113,12 @@ if [ ! -x "$QJSC" ]; then
 fi
 
 # --- 3. typescript + ts-blank-space from the npm registry -------------------
+# Both tarballs are checksum-verified against the pins (see ../pinned-sources.sh):
+# an npm .tgz is content-addressed and immutable, so its sha256 is the pin.
 TSPKG="$BUILD/typescript-$TS_VERSION"
-if [ ! -d "$TSPKG" ]; then
-    echo "Fetching typescript $TS_VERSION ..."
-    mkdir -p "$TSPKG"
-    curl -fsSL "https://registry.npmjs.org/typescript/-/typescript-${TS_VERSION}.tgz" \
-        | tar xz -C "$TSPKG" --strip-components=1
-fi
+fetch_npm "$TSPKG" typescript "$TS_VERSION" "$TS_SHA256"
 TBSPKG="$BUILD/ts-blank-space-$TBS_VERSION"
-if [ ! -d "$TBSPKG" ]; then
-    echo "Fetching ts-blank-space $TBS_VERSION ..."
-    mkdir -p "$TBSPKG"
-    curl -fsSL "https://registry.npmjs.org/ts-blank-space/-/ts-blank-space-${TBS_VERSION}.tgz" \
-        | tar xz -C "$TBSPKG" --strip-components=1
-fi
+fetch_npm "$TBSPKG" ts-blank-space "$TBS_VERSION" "$TBS_SHA256"
 
 # --- 4a. libs.js: the lib .d.ts chain as a global map ------------------------
 # Everything except the environments the sandbox doesn't have (dom, webworker,
