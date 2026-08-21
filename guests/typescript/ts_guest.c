@@ -33,6 +33,11 @@
  *  - run time, always: an eval that yields a Promise or leaves jobs queued
  *    returns the sentinel typed `AsyncIncomplete` instead of half a run.
  *
+ * Two static exports, one analysis: `check` returns the diagnostics array (the
+ * original contract, unchanged), `analyze` returns {diagnostics, schemas} —
+ * where `schemas` carries the JSON Schema derived from the type argument of
+ * each call the `type_argument_schemas` compile option names.
+ *
  * Built with the WASI SDK in reactor mode; see build.sh.
  */
 #include <stdint.h>
@@ -499,16 +504,15 @@ static JSValue fetch_opts(JSContext *ctx) {
 }
 
 /* ------------------------------------------------------------------ */
-/* check entrypoint (optional export — type-check only, nothing runs)  */
+/* static entrypoints (optional exports — analysis only, nothing runs) */
 /* ------------------------------------------------------------------ */
 
-/* `check(ptr, len)`: the argument is a msgpack string (TS source). Returns a
- * msgpack ARRAY of every error diagnostic ({message, type, line?}); an empty
- * array means the source is well-typed against the current SDK. No user
- * context is created and no guest code executes. Ignores @ts-nocheck — an
- * explicit check asks for the diagnostics. */
-__attribute__((export_name("check")))
-int64_t check(int32_t ptr, int32_t len) {
+/* Shared body of `check` and `analyze`: decode the msgpack string argument,
+ * call the named driver function with (source, dts, opts), and pack whatever it
+ * returns. No user context is created and no guest code executes; both ignore
+ * @ts-nocheck, since an explicit static pass asks for the diagnostics. */
+static int64_t run_static(const char *driver_fn, const char *entry,
+                          int32_t ptr, int32_t len) {
     if (ensure_compiler()) {
         return ret_error("failed to start the TypeScript compiler");
     }
@@ -517,11 +521,13 @@ int64_t check(int32_t ptr, int32_t len) {
     JSValue srcv = mp_to_js(g_cctx, &r);
     if (!JS_IsString(srcv)) {
         JS_FreeValue(g_cctx, srcv);
-        return ret_error("check expects a source string");
+        char argbuf[64];
+        snprintf(argbuf, sizeof(argbuf), "%s expects a source string", entry);
+        return ret_error(argbuf);
     }
 
     JSValue g = JS_GetGlobalObject(g_cctx);
-    JSValue fn = JS_GetPropertyStr(g_cctx, g, "__terrariumCheck");
+    JSValue fn = JS_GetPropertyStr(g_cctx, g, driver_fn);
     JS_FreeValue(g_cctx, g);
     JSValue dts = fetch_dts(g_cctx);
     JSValue opts = fetch_opts(g_cctx);
@@ -546,6 +552,25 @@ int64_t check(int32_t ptr, int32_t len) {
     }
     JS_FreeValue(g_cctx, res);
     return out;
+}
+
+/* `check(ptr, len)`: the argument is a msgpack string (TS source). Returns a
+ * msgpack ARRAY of every error diagnostic ({message, type, line?}); an empty
+ * array means the source is well-typed against the current SDK. This shape is
+ * the host's oldest contract and never changes — anything richer is `analyze`. */
+__attribute__((export_name("check")))
+int64_t check(int32_t ptr, int32_t len) {
+    return run_static("__terrariumCheck", "check", ptr, len);
+}
+
+/* `analyze(ptr, len)`: same argument, same analysis, a wider result — a msgpack
+ * MAP { diagnostics: [...], schemas: [...] }. `schemas` is empty unless the host
+ * set the `type_argument_schemas` compile option (reserved "$opts" cap), in
+ * which case each entry is { ordinal, callee, schema } where `schema` is the
+ * canonical JSON text derived from that call's single type argument. */
+__attribute__((export_name("analyze")))
+int64_t analyze(int32_t ptr, int32_t len) {
+    return run_static("__terrariumAnalyze", "analyze", ptr, len);
 }
 
 /* ------------------------------------------------------------------ */

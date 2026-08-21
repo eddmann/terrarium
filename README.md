@@ -92,6 +92,23 @@ returns *every* diagnostic as data (`[]` = passed). It works on every guest at t
 depth its language allows (a full type-check here; a syntax/compile check on the
 JS, Python, and PHP guests). See [docs/api.md](docs/api.md).
 
+`analyze()` is the same pass with more of the compiler's knowledge handed back.
+Name some callees and the TypeScript guest derives a **JSON Schema from each
+call's type argument** — the author writes the type, you get the contract:
+
+```php
+$ts = new Terrarium('typescript_guest.wasm', typeArgumentSchemas: ['ctx.agent']);
+$ts->analyze('const v = ctx.agent<{ ok: boolean; note?: string }>({ … }); v;')['schemas'];
+// [['ordinal' => 0, 'callee' => 'ctx.agent',
+//   'schema' => '{"type":"object","properties":{"ok":{"type":"boolean"},"note":{"type":"string"}},'
+//             . '"required":["ok"],"additionalProperties":false}']]
+```
+
+Canonical JSON text, identified by call ordinal so reformatting can't repoint
+it, and anything with no faithful schema form is refused by member path rather
+than approximated. See
+[docs/api.md](docs/api.md#type-argument-schemas).
+
 The sandbox is **synchronous** — there is no event loop, so a program that
 suspends can never resume. That failure is never silent: a JS/TS eval yielding a
 promise or leaving callbacks queued raises `AsyncIncomplete`, and

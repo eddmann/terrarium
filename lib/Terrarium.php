@@ -66,6 +66,14 @@ final class Terrarium
      * It is a host constraint rather than an author preference, so it holds
      * even under `// @ts-nocheck`. Guests without a compiler accept the option
      * and ignore it — they fail loudly at run time instead (see `eval()`).
+     *
+     * `typeArgumentSchemas: ['ctx.model', 'ctx.agent']` asks a compiling guest
+     * to derive a JSON Schema from the single type argument of every call to
+     * those callees, and to return them from `analyze()`. Nothing else changes:
+     * `eval()` and `check()` behave exactly as before, and a call to a listed
+     * callee written WITHOUT a type argument is untouched.
+     *
+     * @param list<string>|null $typeArgumentSchemas
      */
     public function __construct(
         string $path,
@@ -75,6 +83,7 @@ final class Terrarium
         ?int $fuel = null,
         bool $isolated = false,
         bool $syncOnly = false,
+        ?array $typeArgumentSchemas = null,
     ) {
         $bytes = @file_get_contents($path);
         if ($bytes === false) {
@@ -88,8 +97,23 @@ final class Terrarium
             fuel: $fuel,
             isolated: $isolated,
         );
+        $options = [];
         if ($syncOnly) {
-            $this->rt->setCompileOptions(['sync_only' => true]);
+            $options['sync_only'] = true;
+        }
+        if ($typeArgumentSchemas !== null && $typeArgumentSchemas !== []) {
+            // A misspelt option would otherwise extract nothing, in silence.
+            foreach ($typeArgumentSchemas as $callee) {
+                if (!is_string($callee) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/', $callee)) {
+                    throw new \InvalidArgumentException(
+                        'invalid typeArgumentSchemas entry: every callee must be a dotted identifier chain, e.g. "ctx.model"'
+                    );
+                }
+            }
+            $options['type_argument_schemas'] = array_values($typeArgumentSchemas);
+        }
+        if ($options !== []) {
+            $this->rt->setCompileOptions($options);
         }
     }
 
@@ -171,6 +195,40 @@ final class Terrarium
     public function check(string $source): array
     {
         return $this->rt->check($source);
+    }
+
+    /**
+     * The same static pass as `check()`, with everything the guest was asked to
+     * extract alongside the diagnostics:
+     *
+     *     ['diagnostics' => [...], 'schemas' => [...]]
+     *
+     * `diagnostics` is byte-for-byte what `check()` returns. `schemas` is empty
+     * unless the guest was constructed with `typeArgumentSchemas:`, in which
+     * case the TypeScript guest returns one entry per matched call:
+     *
+     *     ['ordinal' => 0, 'callee' => 'ctx.agent', 'schema' => '{"type":"object",…}']
+     *
+     * `schema` is canonical JSON TEXT — fixed key order, no whitespace — so the
+     * same source always yields byte-identical bytes to bake, store, or hash.
+     * `ordinal` is the call's 0-based index among matched calls in source order,
+     * and is the ONLY identity offered: a line:column would move every time the
+     * file is reformatted, while the ordinal survives renaming, rewrapping and
+     * commenting. A matched call whose type argument has no JSON Schema form
+     * still consumes its ordinal — it appears in `diagnostics` as a
+     * `TSSchemaError` carrying that ordinal — so one bad call cannot renumber
+     * the others.
+     *
+     * Nothing executes, exactly as with `check()`.
+     *
+     * @return array{
+     *     diagnostics: list<array{message: string, type?: string, line?: int, ordinal?: int}>,
+     *     schemas: list<array{ordinal: int, callee: string, schema: string}>
+     * }
+     */
+    public function analyze(string $source): array
+    {
+        return $this->rt->analyze($source);
     }
 
     /**

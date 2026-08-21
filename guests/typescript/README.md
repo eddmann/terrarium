@@ -68,7 +68,8 @@ exact source line, **before any guest code runs**. `// @ts-nocheck` (TypeScript'
 own pragma, leading comments only) skips the check. Types are then erased
 whitespace-preserving, so runtime error lines match the TS you submitted, and the
 JS runs in the user context. `check()` runs the full type-check and returns *every*
-diagnostic as data.
+diagnostic as data; `analyze()` runs the same pass and adds the extracted
+type-argument schemas (below).
 
 ## Asynchrony: refused up front, and caught at run time
 
@@ -106,6 +107,65 @@ that yields a `Promise` (in any state) or leaves jobs queued comes back as the
 [QuickJS guest](../quickjs/README.md#no-event-loop-asynchronous-code-fails-loudly),
 which uses the identical check. That covers what the option cannot: `@ts-nocheck`
 source, or a promise chain built without `async`/`await` at all.
+
+## Type argument → JSON Schema
+
+**`type_argument_schemas`, opt-in, static.** Given a list of callee names in the
+same `$opts` map, the driver derives a JSON Schema from the single type argument
+of every call to them, and returns the results from the guest's second static
+export, **`analyze`** (`{diagnostics, schemas}`), alongside the diagnostics
+`check` already returned. `check`'s own array shape never changes.
+
+```ts
+const audit = ctx.agent<{ verdicts: { id: string; judgment: "pass" | "fail" }[] }>({ … });
+```
+
+```php
+$ts = new Terrarium($wasm, typeArgumentSchemas: ['ctx.model', 'ctx.agent']);
+$ts->analyze($source)['schemas'];
+// [['ordinal' => 0, 'callee' => 'ctx.agent', 'schema' => '{"type":"object",…}']]
+```
+
+This is the inverse of schema-first authoring: the author writes the *type*, the
+host derives the contract. The full accepted/refused matrix lives in
+[docs/api.md](../../docs/api.md#type-argument-schemas); the parts that are
+properties of *this* implementation:
+
+- **The walk is structural, not textual.** A callee matches by its identifier
+  chain (`ctx` `.` `agent`), never by `getText()`, so spacing, line wrapping and
+  interleaved comments cannot make or break a match. Only calls carrying exactly
+  one type argument match; a call without one is left alone entirely.
+- **Identity is the call ordinal** — the 0-based index among matched calls in
+  source order (collected then sorted by start position, so it is a property of
+  the text rather than of the traversal). A line:column would be repointed by
+  every reformat; the ordinal is not. A call whose type argument has no schema
+  form still consumes its ordinal, yielding a `TSSchemaError` diagnostic that
+  carries that ordinal in the data (and a line, for the human) instead of a
+  schema — so one bad call cannot renumber its neighbours.
+- **The JSON is emitted as text**, key by key, rather than `JSON.stringify`'d
+  from an object: property order then follows declaration order exactly, and
+  integer-like property names (`{ "2": string; "10": string }`) cannot be
+  hoisted by the engine's own key ordering. The same source always yields
+  byte-identical schema bytes, which is what makes them safe to bake and hash.
+- **Refusals name the member path** (`verdicts[].judgment: function types cannot
+  be expressed as JSON Schema`) and are total: anything the host's type-level
+  reader could not turn back into the author's type is refused rather than
+  approximated. Recursive types are detected by an identity stack and refused by
+  naming the cycle, never by looping.
+- **Extraction never gates execution.** It runs on the `check`/`analyze` path
+  only; `eval` is untouched.
+
+`tools/dev-driver.mjs` runs this exact `driver.js` under plain Node against the
+same pinned `typescript` package, so the serializer can be iterated in
+milliseconds instead of per 28 MB fixture rebuild:
+
+```sh
+cd guests/typescript
+node tools/dev-driver.mjs analyze path/to/source.ts ctx.model ctx.agent
+```
+
+It is a development aid with no part in the build; the authoritative
+expectations are the golden matrix in `tests/php/12_typescript_schemas.php`.
 
 ## Wizer pre-initialization
 

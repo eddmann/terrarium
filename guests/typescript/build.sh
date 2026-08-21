@@ -199,7 +199,7 @@ echo "Compiling typescript_guest.base.wasm ..."
     "$BUILD/typescript_bc.c" "$BUILD/libs_bc.c" "$BUILD/tsblank_bc.c" "$BUILD/driver_bc.c" \
     "$QJS/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" "$QJS/dtoa.c" \
     -lm \
-    -Wl,--export=eval -Wl,--export=guest_alloc -Wl,--export=check \
+    -Wl,--export=eval -Wl,--export=guest_alloc -Wl,--export=check -Wl,--export=analyze \
     -Wl,-z,stack-size=12582912 \
     -o "$BUILD/typescript_guest.base.wasm"
 

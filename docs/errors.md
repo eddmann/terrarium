@@ -74,6 +74,7 @@ types are Terrarium's own, and are the ones worth matching on:
 | `TS<code>` | TypeScript guest | a type diagnostic — the compiler's own code (`TS2345`, `TS2322`, …) |
 | `TSSyntaxError` | TypeScript guest | syntax that cannot be type-erased (`enum`, `namespace`, …) |
 | `TSSyncOnly` | TypeScript guest, with `syncOnly: true` | `async`, `await`, `for await`, `function*`, `yield` — rejected before anything runs |
+| `TSSchemaError` | TypeScript guest, with `typeArgumentSchemas:` | a matched call's type argument has no JSON Schema form — a **static** diagnostic only, carrying the call `ordinal` and the offending member path |
 | `AsyncIncomplete` | QuickJS + TypeScript guests, **always** | the eval produced a `Promise`, or left jobs queued: nothing drains the job queue, so it can never finish |
 
 `AsyncIncomplete` is the loud version of a failure that used to be silent. The
@@ -101,6 +102,11 @@ as exceptions, and never runs the guest.
 $ts->check('user.fetch("42")');
 // [['message' => "Argument of type 'string' is not assignable ...", 'type' => 'TS2345', 'line' => 1]]
 ```
+
+`TSSchemaError` lives only here: it is produced by
+[type-argument extraction](api.md#type-argument-schemas), which runs on the
+`check()`/`analyze()` path and never gates `eval()`, so it is a diagnostic and
+never an exception.
 
 Use `check()` to lint/validate; let `eval()` throw for errors that only appear at
 run time. A failed **type-check** inside `eval()` (TypeScript guest) still raises

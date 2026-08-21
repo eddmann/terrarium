@@ -52,10 +52,10 @@
         return fileName.indexOf(LIB_DIR) === 0 ? fileName.slice(LIB_DIR.length) : fileName;
     }
 
-    // Run the checker over [libs, runtime+sdk .d.ts, source]; return every
-    // error diagnostic as {message, type, line?}. Shared by eval (first error
-    // gates execution) and the check-only entrypoint (full list is the result).
-    function runCheck(source, sdkDts) {
+    // Build the Program over [libs, runtime+sdk .d.ts, source]. Shared by the
+    // diagnostics pass and by the type-argument schema extraction below, which
+    // needs the same Program's TypeChecker.
+    function buildProgram(source, sdkDts) {
         var files = Object.create(null);
         files["/main.ts"] = source;
         files["/sdk.d.ts"] = RUNTIME_DTS + (sdkDts || "");
@@ -101,7 +101,13 @@
         );
         lastProgram = program;
         lastDts = sdkDts;
+        return program;
+    }
 
+    // Every error diagnostic of `program` as {message, type, line?}. Shared by
+    // eval (the first error gates execution) and the check-only entrypoint
+    // (the full list is the result).
+    function programErrors(program) {
         var diags = ts.getPreEmitDiagnostics(program);
         var errors = [];
         for (var j = 0; j < diags.length; j++) {
@@ -122,6 +128,10 @@
             errors.push(out);
         }
         return errors;
+    }
+
+    function runCheck(source, sdkDts) {
+        return programErrors(buildProgram(source, sdkDts));
     }
 
     // ---------------------------------------------------------------------
@@ -223,6 +233,433 @@
         return !!(options && options.sync_only);
     }
 
+    // ---------------------------------------------------------------------
+    // TYPE_ARGUMENT_SCHEMAS: the author writes the type, the host gets the schema
+    // ---------------------------------------------------------------------
+    //
+    // With `type_argument_schemas: ["ctx.model", "ctx.agent"]` the guest walks
+    // the source for calls to those callees carrying exactly one type argument,
+    // resolves that type argument with the checker, and serialises it to JSON
+    // Schema. The host reads the results from `analyze()`; nothing about `eval`
+    // changes.
+    //
+    // The emitted subset is deliberately narrow -- exactly what a type-level
+    // schema interpreter on the host side can read back:
+    //
+    //   object  {"type":"object","properties":{...},"required":[...],
+    //            "additionalProperties":false}   -- `?` members omitted from required
+    //   array   {"type":"array","items":<schema>}
+    //   scalars {"type":"string"|"number"|"boolean"|"null"}
+    //   literal {"const":<value>}      union of literals {"type":T,"enum":[...]}
+    //   x|null  {"type":["string","null"]}       -- primitives only
+    //
+    // Everything else is REFUSED with a diagnostic naming the offending member
+    // path, because a schema that the host cannot turn back into the author's
+    // type is worse than no schema: it silently re-types the result. The
+    // refusals are functions, any/unknown/never/undefined, symbols, bigint,
+    // enums, Date and other lib/class instances, Promises, index signatures,
+    // tuples, unresolved generics, non-plain intersections, object|null, and
+    // recursion.
+    //
+    // Determinism is a hard requirement -- a host may store or hash what comes
+    // back, so the same source must always yield the same bytes. The JSON is
+    // therefore emitted as text by hand, not JSON.stringify'd: property order
+    // then follows declaration order exactly, and integer-like keys cannot be
+    // reshuffled by the engine's own property ordering.
+    var SCHEMA_ERROR_TYPE = "TSSchemaError";
+
+    // A refusal carrying the member path it happened at. Thrown through the
+    // recursion and caught once per call site.
+    function SchemaError(path, reason) {
+        this.path = path;
+        this.reason = reason;
+    }
+
+    function fail(path, reason) {
+        throw new SchemaError(path, reason);
+    }
+
+    // The member path as the author reads it: "" is the type argument itself.
+    function pathLabel(path) {
+        return path === "" ? "<type argument>" : path;
+    }
+
+    function memberPath(path, name) {
+        return path === "" ? name : path + "." + name;
+    }
+
+    function itemPath(path) {
+        return path + "[]";
+    }
+
+    // Scalars, verbatim: the only place engine formatting could creep in. All
+    // reachable values are JSON literals from the source text.
+    function jsonScalar(value) {
+        if (value === null) return "null";
+        if (typeof value === "boolean") return value ? "true" : "false";
+        if (typeof value === "number") return JSON.stringify(value);
+        return JSON.stringify(String(value));
+    }
+
+    function isLibFile(fileName) {
+        if (fileName.indexOf(LIB_DIR) === 0) return true;
+        var base = fileName.slice(fileName.lastIndexOf("/") + 1);
+        return base.indexOf("lib.") === 0 && base.lastIndexOf(".d.ts") === base.length - 5;
+    }
+
+    // The literal *value* of a literal type, or undefined for anything else.
+    function literalValue(checker, type) {
+        var f = type.flags;
+        if (f & ts.TypeFlags.EnumLike) return undefined;      // TS enums are erased, never literals here
+        if (f & ts.TypeFlags.StringLiteral) return type.value;
+        if (f & ts.TypeFlags.NumberLiteral) return type.value;
+        if (f & ts.TypeFlags.BooleanLiteral) return type.intrinsicName === "true";
+        return undefined;
+    }
+
+    function literalTypeName(value) {
+        if (typeof value === "string") return "string";
+        if (typeof value === "number") return "number";
+        return "boolean";
+    }
+
+    function scalarSchema(name) {
+        return { kind: name, json: '{"type":"' + name + '"}' };
+    }
+
+    // A named result: `kind` drives the nullable spelling (only primitives can
+    // become `type: [x, "null"]`), `json` is the canonical text.
+    function schemaOf(kind, json) {
+        return { kind: kind, json: json };
+    }
+
+    // Refuse anything that is not a plain data object. Used for the members of
+    // an intersection, which has no symbol of its own to interrogate.
+    function assertPlainObject(checker, type, path, what) {
+        if (!(type.flags & ts.TypeFlags.Object)) {
+            fail(path, what + " is not an object type, so the intersection does not reduce to one");
+        }
+        if (checker.isTupleType(type) || checker.isArrayType(type)) {
+            fail(path, what + " is an array type, so the intersection does not reduce to a plain object");
+        }
+        if (checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0 ||
+            checker.getSignaturesOfType(type, ts.SignatureKind.Construct).length > 0) {
+            fail(path, what + " is callable, so the intersection does not reduce to a plain object");
+        }
+        assertNotForeignObject(checker, type, path);
+    }
+
+    // Class instances and library types (Date, Map, Promise, ...) carry
+    // behaviour, not data: their JSON form is a lossy convention, never the
+    // type. Refuse rather than invent one.
+    function assertNotForeignObject(checker, type, path) {
+        var sym = type.getSymbol();
+        if (!sym) return;
+        var name = sym.getName();
+        if (sym.flags & ts.SymbolFlags.Class) {
+            fail(path, "class instances (`" + name + "`) cannot be expressed as JSON Schema: " +
+                "use a plain object type or interface describing the data");
+        }
+        var decls = sym.getDeclarations() || [];
+        for (var i = 0; i < decls.length; i++) {
+            // Only *named* library types are refused on sight. An anonymous
+            // type literal or mapped type that happens to be declared in a lib
+            // file is what `Partial<T>`, `Pick<T, K>` and `Record<K, V>` expand
+            // to -- those are judged by their structure like any other object,
+            // so `Partial<{a: string}>` works and `Record<string, number>` is
+            // refused for its index signature, which is the true reason.
+            if (!ts.isInterfaceDeclaration(decls[i]) && !ts.isClassDeclaration(decls[i])) continue;
+            if (!isLibFile(decls[i].getSourceFile().fileName)) continue;
+            if (name === "Promise") {
+                fail(path, "`Promise` cannot be expressed as JSON Schema: this environment is " +
+                    "synchronous, so describe the resolved value directly");
+            }
+            fail(path, "the built-in type `" + name + "` cannot be expressed as JSON Schema " +
+                "(Date, Map, Set, RegExp and friends have no JSON Schema form): " +
+                "use a plain object type, or a string for a serialised value");
+        }
+    }
+
+    // The object body: declaration order for properties, non-optional keys in
+    // `required`, closed to extras.
+    function objectSchema(checker, type, path, stack) {
+        if (checker.getIndexInfosOfType(type).length > 0) {
+            fail(path, "index signatures cannot be expressed as JSON Schema: " +
+                "list the known properties, since the schema must name every key");
+        }
+        var props = checker.getPropertiesOfType(type);
+        var fields = [];
+        var required = [];
+        for (var i = 0; i < props.length; i++) {
+            var sym = props[i];
+            var name = sym.getName();
+            if (name.indexOf("__@") === 0) {
+                fail(memberPath(path, name), "symbol-keyed properties cannot be expressed as JSON Schema");
+            }
+            var optional = !!(sym.flags & ts.SymbolFlags.Optional);
+            var child = memberPath(path, name);
+            var member = schemaFromType(checker, checker.getTypeOfSymbol(sym), child, optional, stack);
+            fields.push(JSON.stringify(name) + ":" + member.json);
+            if (!optional) required.push(JSON.stringify(name));
+        }
+        return schemaOf(
+            "object",
+            '{"type":"object","properties":{' + fields.join(",") + '},"required":[' +
+                required.join(",") + '],"additionalProperties":false}'
+        );
+    }
+
+    // Unions: nullable primitives and literal enums are expressible; nothing
+    // else is. `allowUndefined` is set only for an optional (`?`) member, whose
+    // type the checker widens with `undefined`.
+    function unionSchema(checker, type, path, allowUndefined, stack) {
+        var parts = type.types;
+        var hasNull = false;
+        var hasUndefined = false;
+        var boolLiterals = [];
+        var rest = [];
+        for (var i = 0; i < parts.length; i++) {
+            var p = parts[i];
+            if (p.flags & ts.TypeFlags.Null) hasNull = true;
+            else if (p.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Void)) hasUndefined = true;
+            else if (p.flags & ts.TypeFlags.BooleanLiteral) boolLiterals.push(p);
+            else rest.push(p);
+        }
+        if (hasUndefined && !allowUndefined) {
+            fail(path, "`undefined` in a union cannot be expressed as JSON Schema: " +
+                "mark the property optional with `?` instead");
+        }
+
+        // `true | false` is the boolean type in disguise; a lone one is a literal.
+        var boolAtom = boolLiterals.length === 2;
+        if (!boolAtom) rest = rest.concat(boolLiterals);
+
+        if (rest.length === 0 && !boolAtom) {
+            if (hasNull) return schemaOf("null", '{"type":"null"}');
+            fail(path, "this union has no members that can be expressed as JSON Schema");
+        }
+
+        // All-literal (plus optional null) -> const / enum.
+        if (!boolAtom) {
+            var values = [];
+            var names = [];
+            var allLiteral = true;
+            for (var j = 0; j < rest.length; j++) {
+                var v = literalValue(checker, rest[j]);
+                if (v === undefined) { allLiteral = false; break; }
+                values.push(jsonScalar(v));
+                names.push(literalTypeName(v));
+            }
+            if (allLiteral) {
+                var uniform = names[0];
+                for (var k = 1; k < names.length; k++) if (names[k] !== uniform) uniform = null;
+                if (values.length === 1 && !hasNull) {
+                    return schemaOf("const", '{"const":' + values[0] + "}");
+                }
+                if (hasNull) values.push("null");
+                var prefix = "";
+                if (uniform) {
+                    prefix = hasNull
+                        ? '"type":["' + uniform + '","null"],'
+                        : '"type":"' + uniform + '",';
+                }
+                // A mixed-literal union keeps `enum` alone: every value is still
+                // a JSON literal, there is simply no single `type` for them.
+                return schemaOf("enum", "{" + prefix + '"enum":[' + values.join(",") + "]}");
+            }
+        }
+
+        var atoms = rest.length + (boolAtom ? 1 : 0);
+        if (atoms === 1) {
+            var inner = boolAtom ? scalarSchema("boolean") : schemaFromType(checker, rest[0], path, false, stack);
+            if (!hasNull) return inner;
+            if (inner.kind === "string" || inner.kind === "number" || inner.kind === "boolean") {
+                return schemaOf(inner.kind, '{"type":["' + inner.kind + '","null"]}');
+            }
+            fail(path, "`" + checker.typeToString(type) + "` cannot be expressed as JSON Schema: " +
+                "the nullable spelling `type: [..., \"null\"]` carries primitives only, and " +
+                "`anyOf` is not part of the readable subset -- make the member optional with `?`, " +
+                "or model the empty case explicitly");
+        }
+        fail(path, "`" + checker.typeToString(type) + "` cannot be expressed as JSON Schema: " +
+            "only nullable primitives and unions of literals are expressible");
+    }
+
+    // The dispatch. `stack` carries the types currently being serialised (cycle
+    // detection) with the path each was entered at, so a recursive type is
+    // refused by naming the cycle instead of looping forever.
+    function schemaFromType(checker, type, path, allowUndefined, stack) {
+        for (var s = 0; s < stack.length; s++) {
+            if (stack[s].type === type) {
+                fail(path, "recursive types cannot be expressed as JSON Schema: `" +
+                    checker.typeToString(type) + "` at " + pathLabel(stack[s].path) +
+                    " reappears at " + pathLabel(path));
+            }
+        }
+
+        var F = ts.TypeFlags;
+        var f = type.flags;
+
+        if (f & F.Any) {
+            if (type.intrinsicName === "error") {
+                fail(path, "the type does not resolve (it is an error type), so no JSON Schema can be derived");
+            }
+            fail(path, "`any` cannot be expressed as JSON Schema: describe the actual shape");
+        }
+        if (f & F.Unknown) {
+            fail(path, "`unknown` cannot be expressed as JSON Schema: describe the actual shape");
+        }
+        if (f & F.Never) fail(path, "`never` cannot be expressed as JSON Schema");
+        if (f & (F.Undefined | F.Void)) {
+            fail(path, "`" + checker.typeToString(type) + "` cannot be expressed as JSON Schema: " +
+                "an absent value is spelled by leaving the property out of `required` (mark it `?`)");
+        }
+        if (f & F.BigIntLike) {
+            fail(path, "`bigint` cannot be expressed as JSON Schema: JSON has one number type -- " +
+                "use `number`, or `string` when the value must not lose precision");
+        }
+        if (f & F.ESSymbolLike) fail(path, "symbols cannot be expressed as JSON Schema");
+        if (f & F.EnumLike) {
+            fail(path, "TypeScript `enum` types cannot be expressed as JSON Schema: they are erased " +
+                "here, so nothing survives to name -- use a union of literals instead");
+        }
+        if (f & F.TypeParameter) {
+            fail(path, "the unresolved type parameter `" + checker.typeToString(type) + "` cannot be " +
+                "expressed as JSON Schema: pass a concrete type argument");
+        }
+        if (f & F.NonPrimitive) {
+            fail(path, "`object` cannot be expressed as JSON Schema: describe the actual properties");
+        }
+        if (f & (F.TemplateLiteral | F.StringMapping)) {
+            fail(path, "template literal types cannot be expressed as JSON Schema: use `string`, " +
+                "or a union of the literal values");
+        }
+
+        if (f & F.Null) return schemaOf("null", '{"type":"null"}');
+        // The `boolean` type is itself a union of `true | false`; it must be
+        // recognised before the union branch or it would surface as an enum.
+        if (f & F.Boolean) return scalarSchema("boolean");
+        if (f & (F.StringLiteral | F.NumberLiteral | F.BooleanLiteral)) {
+            return schemaOf("const", '{"const":' + jsonScalar(literalValue(checker, type)) + "}");
+        }
+        if (f & F.String) return scalarSchema("string");
+        // JSON Schema's `integer` is a *narrower* claim than TypeScript's
+        // `number`, so never guess it: `number` stays `number`.
+        if (f & F.Number) return scalarSchema("number");
+
+        if (type.isUnion()) return unionSchema(checker, type, path, allowUndefined, stack);
+
+        stack.push({ type: type, path: path });
+        var out;
+        if (type.isIntersection()) {
+            var members = type.types;
+            for (var m = 0; m < members.length; m++) {
+                assertPlainObject(checker, members[m], path, "`" + checker.typeToString(members[m]) + "`");
+            }
+            out = objectSchema(checker, type, path, stack);
+        } else if (f & F.Object) {
+            if (checker.isTupleType(type)) {
+                fail(path, "tuple types cannot be expressed as JSON Schema: use an array of a single " +
+                    "element type, or an object with named members");
+            }
+            if (checker.isArrayType(type)) {
+                var args = checker.getTypeArguments(type);
+                var item = schemaFromType(checker, args[0], itemPath(path), false, stack);
+                out = schemaOf("array", '{"type":"array","items":' + item.json + "}");
+            } else if (checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0) {
+                fail(path, "function types cannot be expressed as JSON Schema");
+            } else if (checker.getSignaturesOfType(type, ts.SignatureKind.Construct).length > 0) {
+                fail(path, "constructor types cannot be expressed as JSON Schema");
+            } else {
+                assertNotForeignObject(checker, type, path);
+                out = objectSchema(checker, type, path, stack);
+            }
+        } else {
+            fail(path, "`" + checker.typeToString(type) + "` cannot be expressed as JSON Schema");
+        }
+        stack.pop();
+        return out;
+    }
+
+    // The dotted name of a callee, structurally: `ctx.agent` from
+    // `ctx.agent<T>(...)` however it is spaced, wrapped, or commented. Matching
+    // on the AST rather than on `getText()` is what keeps a reformat inert.
+    // Anything that is not a plain identifier chain (element access, a call in
+    // the middle, `this`) has no dotted name and never matches.
+    function calleeName(expr) {
+        if (ts.isIdentifier(expr)) return expr.text;
+        if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.name)) {
+            var left = calleeName(expr.expression);
+            return left === undefined ? undefined : left + "." + expr.name.text;
+        }
+        return undefined;
+    }
+
+    // Every matched call in SOURCE ORDER: callee in `callees`, exactly one type
+    // argument. Sorted by start position rather than by visit order so the
+    // sequence is a property of the text, not of the traversal.
+    function matchedCalls(file, callees) {
+        var found = [];
+        function visit(node) {
+            if (ts.isCallExpression(node) && node.typeArguments && node.typeArguments.length === 1) {
+                var name = calleeName(node.expression);
+                if (name !== undefined && callees.indexOf(name) !== -1) {
+                    found.push({ node: node, callee: name, pos: node.getStart(file) });
+                }
+            }
+            ts.forEachChild(node, visit);
+        }
+        ts.forEachChild(file, visit);
+        found.sort(function (a, b) { return a.pos - b.pos; });
+        return found;
+    }
+
+    // The requested callees, or null when the host asked for no extraction.
+    function schemaCallees(options) {
+        var list = options && options.type_argument_schemas;
+        if (!list || typeof list.length !== "number" || list.length === 0) return null;
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            if (typeof list[i] === "string" && list[i] !== "") out.push(list[i]);
+        }
+        return out.length > 0 ? out : null;
+    }
+
+    // Extract every matched call's schema. Returns {schemas, errors}.
+    //
+    // ORDINAL, not line:col. The identity of a call site has to survive
+    // reformatting -- a prettier run, a renamed variable, an added comment must
+    // not repoint a baked schema -- so a matched call is identified by its
+    // 0-based index among matched calls in source order. An inexpressible type
+    // argument still CONSUMES its ordinal (it yields a diagnostic instead of a
+    // schema) so that one bad call cannot renumber the ones after it.
+    function extractSchemas(program, callees) {
+        var file = program.getSourceFile("/main.ts");
+        if (!file) return { schemas: [], errors: [] };
+        var checker = program.getTypeChecker();
+        var calls = matchedCalls(file, callees);
+        var schemas = [];
+        var errors = [];
+        for (var i = 0; i < calls.length; i++) {
+            var call = calls[i];
+            try {
+                var type = checker.getTypeFromTypeNode(call.node.typeArguments[0]);
+                var schema = schemaFromType(checker, type, "", false, []);
+                schemas.push({ ordinal: i, callee: call.callee, schema: schema.json });
+            } catch (e) {
+                if (!(e instanceof SchemaError)) throw e;
+                errors.push({
+                    message: "cannot derive a JSON Schema from the type argument of `" + call.callee +
+                        "` (call #" + i + "): " + pathLabel(e.path) + ": " + e.reason,
+                    type: SCHEMA_ERROR_TYPE,
+                    line: file.getLineAndCharacterOfPosition(call.pos).line + 1,
+                    ordinal: i,
+                });
+            }
+        }
+        return { schemas: schemas, errors: errors };
+    }
+
     // eval reports one error (execution is gated on the first) but says how
     // many more there are; `check()` is where the full list lives.
     function firstOf(errors) {
@@ -235,11 +672,14 @@
         return out;
     }
 
-    // Check-only entrypoint: every diagnostic, nothing executed. An explicit
-    // check ignores @ts-nocheck -- you asked for the diagnostics. tsc itself
-    // honours the pragma inside the checker, so blank it out of the leading
-    // comments first (same-length replacement: positions are preserved).
-    globalThis.__terrariumCheck = function (source, sdkDts, options) {
+    // The static pass behind both check-only entrypoints: every diagnostic, plus
+    // whatever the host asked to be extracted. Nothing is executed.
+    //
+    // An explicit check ignores @ts-nocheck -- you asked for the diagnostics.
+    // tsc itself honours the pragma inside the checker, so blank it out of the
+    // leading comments first (same-length replacement: positions are preserved,
+    // so lines and call ordinals are unaffected).
+    function analyzeSource(source, sdkDts, options) {
         // Host constraints first, and every occurrence of them: they are the
         // reason the program cannot run at all.
         var errors = syncOnlyRequested(options) ? syncOnlyErrors(source) : [];
@@ -251,7 +691,31 @@
                 source = source.slice(0, idx) + "           " + source.slice(idx + 11);
             }
         }
-        return errors.concat(runCheck(source, sdkDts));
+
+        var program = buildProgram(source, sdkDts);
+        errors = errors.concat(programErrors(program));
+
+        // Extraction diagnostics come last: they are downstream of the type
+        // errors, which usually explain them.
+        var callees = schemaCallees(options);
+        if (!callees) return { diagnostics: errors, schemas: [] };
+        var extracted = extractSchemas(program, callees);
+        return { diagnostics: errors.concat(extracted.errors), schemas: extracted.schemas };
+    }
+
+    // Check-only entrypoint: the diagnostics array, unchanged since the first
+    // release. Schemas are the analyze entrypoint's business -- a host that
+    // knows nothing of them still gets exactly the shape it always got.
+    globalThis.__terrariumCheck = function (source, sdkDts, options) {
+        return analyzeSource(source, sdkDts, options).diagnostics;
+    };
+
+    // Analyze entrypoint: the same diagnostics plus the extracted type-argument
+    // schemas, as {diagnostics, schemas}. With no `type_argument_schemas`
+    // option it is `check()` with an empty schema list.
+    globalThis.__terrariumAnalyze = function (source, sdkDts, options) {
+        var out = analyzeSource(source, sdkDts, options);
+        return { diagnostics: out.diagnostics, schemas: out.schemas };
     };
 
     globalThis.__terrariumCompile = function (source, sdkDts, options) {
