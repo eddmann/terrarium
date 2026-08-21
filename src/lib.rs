@@ -198,9 +198,11 @@ impl Terrarium {
     /// **TypeScript** guest:
     ///
     /// - `sync_only` (bool) — a compile-time rejection of async/generator
-    ///   syntax. Other guests accept it and do nothing with it; the
-    ///   QuickJS-based ones instead fail *at run time* with `AsyncIncomplete`
-    ///   when a program cannot finish, which is on by default everywhere.
+    ///   syntax and of every use of a promise (a promise cannot settle without
+    ///   a job queue, so its callbacks are abandoned in silence). Other guests
+    ///   accept it and do nothing with it; the QuickJS-based ones instead fail
+    ///   *at run time* with `AsyncIncomplete` when a program cannot finish,
+    ///   which is on by default everywhere.
     /// - `type_argument_schemas` (list of callee names) — derive a JSON Schema
     ///   from the single type argument of every call to those callees, and
     ///   return them from `analyze()`.

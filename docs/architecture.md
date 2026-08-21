@@ -373,7 +373,8 @@ is queried once at startup to learn which top-level globals to install (there is
 no synthetic root), `$dts` serves the SDK's generated `.d.ts` to the type-aware
 TypeScript guest, and `$opts` serves the host's **compile options** — an open
 map a compiling guest consults before accepting a program (today `sync_only`,
-which the TypeScript guest enforces as a ban on async/generator syntax; see
+which the TypeScript guest enforces as a ban on async/generator syntax and on
+every use of a promise, and `type_argument_schemas`; see
 [api](api.md#synchronous-only-guests)). Adding an option therefore costs no new
 wasm import and no ABI change: a guest reads the keys it knows and ignores the
 rest. The guest stays dumb and all policy lives host-side.

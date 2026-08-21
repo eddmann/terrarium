@@ -42,9 +42,10 @@ pub const DTS_CAP: &str = "$dts";
 /// guest that knows nothing about one simply ignores it. Guests that compile
 /// nothing (the plain engines) never call this.
 ///
-/// The one option the bundled guests define today is `sync_only` (bool), which
+/// The options the bundled guests define today are `sync_only` (bool), which
 /// the TypeScript guest enforces as a compile-time ban on async/generator
-/// syntax — see `guests/typescript/driver.js`.
+/// syntax and on every use of a promise, and `type_argument_schemas` (a list of
+/// callee names) — see `guests/typescript/driver.js`.
 pub const OPTS_CAP: &str = "$opts";
 
 /// Shared host-side state behind the bridge. Single-threaded (PHP NTS), so

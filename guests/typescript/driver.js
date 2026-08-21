@@ -19,8 +19,11 @@
  *    environment is exactly the capability environment.
  *  - A leading `// @ts-nocheck` comment (TypeScript's own pragma) skips the
  *    check; the source is still stripped and run.
- *  - With `options.sync_only`, asynchronous and generator syntax is rejected
- *    outright (see SYNC_ONLY below) — regardless of `@ts-nocheck`.
+ *  - Syntax the sandbox ENGINE cannot parse (`accessor` fields) is always
+ *    rejected as `TSEngineUnsupported` — the checker would otherwise pass code
+ *    that dies with a SyntaxError at eval (see CONSTRAINTS below).
+ *  - With `options.sync_only`, asynchronous and generator syntax and every use
+ *    of a promise are rejected outright — regardless of `@ts-nocheck`.
  *  - Types are erased with ts-blank-space (whitespace-preserving), so the
  *    returned JS is positionally identical to the input — runtime error line
  *    numbers stay exact. Non-erasable syntax (enum, namespace, ...) is a clear
@@ -165,32 +168,47 @@
         return errors;
     }
 
-    function runCheck(source, sdkDts) {
-        return programErrors(buildProgram(source, sdkDts));
-    }
-
     // ---------------------------------------------------------------------
-    // SYNC_ONLY: the host has no event loop
+    // CONSTRAINTS: what this environment cannot run, whatever the types say
     // ---------------------------------------------------------------------
     //
-    // The guest never drains the microtask/job queue: whatever an `await`
-    // suspends on, or a generator suspends into, is simply never resumed. Left
-    // alone that half-runs silently -- an async IIFE returns a pending promise
-    // and its continuation is dead code. When the host sets `sync_only`, that
-    // syntax is rejected at compile time instead, with a message that teaches
-    // the synchronous shape rather than just naming the ban.
+    // Two families of diagnostic share one walk, because both answer the same
+    // question -- "can this program finish here?" -- and both must be reported
+    // ahead of the type diagnostics, in source order:
+    //
+    //   TSEngineUnsupported  ALWAYS ON. Syntax the sandbox engine refuses at
+    //                        parse time. The checker is happy with it and
+    //                        ts-blank-space passes it straight through, so
+    //                        without this it is checked-clean code that dies
+    //                        with a SyntaxError at eval. An engine truth, not
+    //                        a host preference: no option gates it.
+    //
+    //   TSSyncOnly           OPT-IN (`sync_only`). The guest never drains the
+    //                        microtask/job queue: whatever an `await` suspends
+    //                        on, a generator suspends into, or a promise
+    //                        reaction waits for is simply never resumed. Left
+    //                        alone that half-runs silently -- an async IIFE
+    //                        returns a pending promise and its continuation is
+    //                        dead code; `p.then(f)` on a promise that never
+    //                        settles abandons `f` without a trace. When the
+    //                        host sets `sync_only` that is rejected at compile
+    //                        time instead, with a message that teaches the
+    //                        synchronous shape rather than just naming the ban.
     //
     // Deliberate asymmetry with `@ts-nocheck`: the pragma opts out of the TYPE
     // check, which is an author's preference about their own annotations.
-    // sync-only is not a preference -- it is a capability the host does not
-    // have -- so the walk runs whether or not the pragma is present. A guest
-    // that could not finish the program is worse than one that refuses it.
+    // Neither of these is a preference -- one is what the engine can parse, the
+    // other a capability the host does not have -- so the walk runs whether or
+    // not the pragma is present. A guest that could not finish the program is
+    // worse than one that refuses it.
     //
-    // A dedicated `forEachChild` walk over the source's own SourceFile, not the
-    // checker: this needs syntax only, so it costs one parse instead of a
-    // Program, and it stays available on the `@ts-nocheck` path where no
-    // Program is built at all.
+    // The walk takes a TypeChecker when there is one and works without it. On
+    // the `@ts-nocheck` compile path no Program is built at all, so the promise
+    // rules fall back to conservative SYNTAX matching (see below); everything
+    // else needs syntax only either way.
     var SYNC_ONLY_TYPE = "TSSyncOnly";
+    var ENGINE_UNSUPPORTED_TYPE = "TSEngineUnsupported";
+
     var SYNC_ONLY_MESSAGES = {
         async:
             "`async` functions are not supported: this environment is synchronous and never runs " +
@@ -208,26 +226,225 @@
         yield:
             "`yield` is not supported: this environment runs a program to completion in one go and " +
             "never resumes a suspended one. Collect the values into an array and return it.",
+        promise:
+            "`Promise` cannot be used here: promises cannot settle in a synchronous guest -- the job " +
+            "queue is never drained, so a promise stays pending forever and every reaction registered " +
+            "on it is abandoned in silence. Use the value directly -- SDK calls return theirs " +
+            "synchronously.",
+        promiseThen:
+            "`.then` / `.catch` / `.finally` cannot run here: promises cannot settle in a synchronous " +
+            "guest -- the job queue is never drained, so the callback you register is dead code that " +
+            "fails silently. Use the value directly -- SDK calls return theirs synchronously.",
     };
 
-    // Every async/generator construct in `source`, as {message, type, line},
-    // in source order. Empty when the source is already synchronous.
-    function syncOnlyErrors(source) {
-        var file = ts.createSourceFile("/main.ts", source, TARGET, true);
+    // The value-carrying expression forms whose TYPE is worth asking about.
+    // Deliberately a list rather than "every expression": the walk asks the
+    // checker once per node it names, and these are the shapes a promise can
+    // actually arrive in.
+    var TYPED_EXPRESSION_KINDS = [
+        ts.SyntaxKind.CallExpression,
+        ts.SyntaxKind.NewExpression,
+        ts.SyntaxKind.Identifier,
+        ts.SyntaxKind.PropertyAccessExpression,
+        ts.SyntaxKind.ElementAccessExpression,
+        ts.SyntaxKind.ParenthesizedExpression,
+        ts.SyntaxKind.NonNullExpression,
+        ts.SyntaxKind.AsExpression,
+        ts.SyntaxKind.SatisfiesExpression,
+        ts.SyntaxKind.ConditionalExpression,
+        ts.SyntaxKind.TaggedTemplateExpression,
+    ];
+
+    function isTypedExpressionKind(kind) {
+        return TYPED_EXPRESSION_KINDS.indexOf(kind) !== -1;
+    }
+
+    // An identifier that NAMES something (a declaration, a property, a member)
+    // rather than referring to a value. Skipped so `const p = f()` reports the
+    // call once instead of reporting the binding as well.
+    function isNamePosition(node) {
+        var p = node.parent;
+        if (!p) return false;
+        return p.name === node || p.propertyName === node;
+    }
+
+    // The global `Promise` / `PromiseLike`, identified by DECLARATION and never
+    // by name: a user's own `class Promise` shadows the global and is a
+    // different thing entirely, which is exactly the distinction the checker
+    // exists to make.
+    function isGlobalPromiseSymbol(sym) {
+        if (!sym) return false;
+        var name = sym.getName();
+        if (name !== "Promise" && name !== "PromiseLike") return false;
+        var decls = sym.getDeclarations() || [];
+        if (decls.length === 0) return false;
+        for (var i = 0; i < decls.length; i++) {
+            if (!isLibFile(decls[i].getSourceFile().fileName)) return false;
+        }
+        return true;
+    }
+
+    // Promise-like: the global `Promise`/`PromiseLike`, or a type whose `then`
+    // member RETURNS one of those -- a host SDK's own thenable, which `await`
+    // would consume exactly as it consumes a promise.
+    //
+    // The return type is what makes this precise rather than merely broad. "Has
+    // a callable `then`" alone would refuse an ordinary object with a
+    // `then(cb)` method of its own, which in a synchronous guest simply calls
+    // `cb` and works perfectly; `PromiseLike.then` is defined to hand back
+    // another `PromiseLike`, so requiring that keeps the rule on the things that
+    // genuinely cannot settle. One level of recursion is all it takes, because
+    // the named check terminates it.
+    function isPromiseLikeType(checker, type, depth) {
+        if (!type) return false;
+        if (type.isUnion && type.isUnion()) {
+            for (var i = 0; i < type.types.length; i++) {
+                if (isPromiseLikeType(checker, type.types[i], depth)) return true;
+            }
+            return false;
+        }
+        if (isGlobalPromiseSymbol(type.getSymbol && type.getSymbol())) return true;
+        if (depth > 0) return false;
+        var then = checker.getPropertyOfType(type, "then");
+        if (!then) return false;
+        var sigs = checker.getSignaturesOfType(checker.getTypeOfSymbol(then), ts.SignatureKind.Call);
+        for (var s = 0; s < sigs.length; s++) {
+            if (isPromiseLikeType(checker, checker.getReturnTypeOfSignature(sigs[s]), depth + 1)) return true;
+        }
+        return false;
+    }
+
+    function isPromiseLikeAt(checker, node) {
+        return isPromiseLikeType(checker, checker.getTypeAtLocation(node), 0);
+    }
+
+    // `x.then(...)` / `.catch(...)` / `.finally(...)`, the three ways a reaction
+    // is registered. Returns the member name, or undefined.
+    var REACTION_MEMBERS = ["then", "catch", "finally"];
+
+    function reactionCallName(node) {
+        if (!ts.isCallExpression(node)) return undefined;
+        var callee = node.expression;
+        if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.name)) return undefined;
+        return REACTION_MEMBERS.indexOf(callee.name.text) !== -1 ? callee.name.text : undefined;
+    }
+
+    // Syntax the ENGINE cannot parse, however well-typed it is.
+    //
+    // TO EXTEND: add a case here and a probe to tests/php/11_es_surface.php
+    // proving the engine really rejects it; TO RETIRE one when a quickjs-ng bump
+    // implements it, delete the case and flip that probe from "absent" to
+    // "implemented". The audit in guests/typescript/tools/lib-audit/ (with
+    // `--parity`) is what catches a case that should have been here.
+    //
+    //   accessor  `class C { accessor x = 1 }` -- an ES2022 decorator-adjacent
+    //             field. quickjs-ng v0.16.2 raises SyntaxError on the keyword,
+    //             and ts-blank-space emits it verbatim (it is not a type).
+    function engineUnsupportedAt(node, report) {
+        var mods = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
+        if (!mods) return;
+        for (var i = 0; i < mods.length; i++) {
+            if (mods[i].kind === ts.SyntaxKind.AccessorKeyword) {
+                report(
+                    mods[i].getStart(),
+                    ENGINE_UNSUPPORTED_TYPE,
+                    "`accessor` class members are not supported: the sandbox engine (quickjs-ng " +
+                        "v0.16.2) raises a SyntaxError on the `accessor` keyword, so this would " +
+                        "type-check and then fail to parse at run time. Declare a private field with " +
+                        "an explicit `get`/`set` pair instead."
+                );
+            }
+        }
+    }
+
+    // Every constraint violation in `file`, as {message, type, line}, in source
+    // order. `checker` may be undefined (the `@ts-nocheck` compile path), in
+    // which case the promise rules degrade to the conservative syntax form.
+    // `syncOnly` gates the TSSyncOnly family only.
+    //
+    // ## The conservative syntax fallback, and why it is acceptable
+    //
+    // Without a Program there is no way to ask what a type is, so the fallback
+    // matches on shape alone: `new Promise`, any identifier spelled `Promise`,
+    // and any CALL through a member named `then`/`catch`/`finally`. The last
+    // one over-matches -- an object of the author's own with a `.then(cb)`
+    // method is refused even though nothing asynchronous is happening. That is
+    // a deliberate trade in an OPT-IN mode whose whole purpose is to refuse
+    // work that cannot complete: `sync_only` + `@ts-nocheck` is a caller who
+    // has asked for the strict environment and then declined the type
+    // information that would make the check precise. Dropping `@ts-nocheck`
+    // (or renaming the method) restores exact, checker-backed matching.
+    function constraintErrors(file, checker, syncOnly) {
         var found = [];
 
-        function report(kind, pos) {
-            found.push({ pos: pos, kind: kind });
+        function report(pos, type, message) {
+            found.push({ pos: pos, type: type, message: message });
         }
 
-        function visit(node) {
+        // The sync-only family is gated here rather than around the walk, so a
+        // single traversal serves both families and the output stays in source
+        // order however they interleave.
+        function sync(pos, kind) {
+            if (!syncOnly) return;
+            report(pos, SYNC_ONLY_TYPE, SYNC_ONLY_MESSAGES[kind]);
+        }
+
+        // Returns true when this node was reported AS a promise, so the subtree
+        // below it is not reported again -- one diagnostic per promise
+        // expression, at its outermost point.
+        function promiseAt(node) {
+            if (!syncOnly) return false;
+            var reaction = reactionCallName(node);
+            if (checker) {
+                if (reaction !== undefined && isPromiseLikeAt(checker, node.expression.expression)) {
+                    sync(node.getStart(file), "promiseThen");
+                    return true;
+                }
+                if (
+                    ts.isNewExpression(node) &&
+                    ts.isIdentifier(node.expression) &&
+                    isGlobalPromiseSymbol(checker.getSymbolAtLocation(node.expression))
+                ) {
+                    sync(node.getStart(file), "promise");
+                    return true;
+                }
+                if (isTypedExpressionKind(node.kind) && !isNamePosition(node) && isPromiseLikeAt(checker, node)) {
+                    sync(node.getStart(file), "promise");
+                    return true;
+                }
+                if (
+                    ts.isIdentifier(node) &&
+                    !isNamePosition(node) &&
+                    isGlobalPromiseSymbol(checker.getSymbolAtLocation(node))
+                ) {
+                    sync(node.getStart(file), "promise");
+                    return true;
+                }
+                return false;
+            }
+            // No Program: shape only.
+            if (reaction !== undefined) {
+                sync(node.getStart(file), "promiseThen");
+                return true;
+            }
+            if (ts.isIdentifier(node) && node.text === "Promise" && !isNamePosition(node)) {
+                sync(node.getStart(file), "promise");
+                return true;
+            }
+            return false;
+        }
+
+        // `promiseHushed` suppresses nested promise reports only: the async /
+        // generator / engine rules keep running through the whole tree, so a
+        // `p.then(async () => …)` still reports the `async` as well.
+        function visit(node, promiseHushed) {
             var kind = node.kind;
             if (kind === ts.SyntaxKind.AwaitExpression) {
-                report("await", node.getStart(file));
+                sync(node.getStart(file), "await");
             } else if (kind === ts.SyntaxKind.YieldExpression) {
-                report("yield", node.getStart(file));
+                sync(node.getStart(file), "yield");
             } else if (kind === ts.SyntaxKind.ForOfStatement && node.awaitModifier) {
-                report("forAwait", node.getStart(file));
+                sync(node.getStart(file), "forAwait");
             }
             // `function*` / `*method()` in every form that can carry the token.
             if (
@@ -236,7 +453,7 @@
                     kind === ts.SyntaxKind.FunctionExpression ||
                     kind === ts.SyntaxKind.MethodDeclaration)
             ) {
-                report("generator", node.asteriskToken.getStart(file));
+                sync(node.asteriskToken.getStart(file), "generator");
             }
             // The `async` modifier on any function form: declaration,
             // expression, arrow, class method, object-literal method.
@@ -244,20 +461,27 @@
             if (mods) {
                 for (var i = 0; i < mods.length; i++) {
                     if (mods[i].kind === ts.SyntaxKind.AsyncKeyword) {
-                        report("async", mods[i].getStart(file));
+                        sync(mods[i].getStart(file), "async");
                     }
                 }
             }
-            ts.forEachChild(node, visit);
+
+            engineUnsupportedAt(node, report);
+
+            var hushed = promiseHushed;
+            if (!hushed && promiseAt(node)) hushed = true;
+
+            ts.forEachChild(node, function (child) { visit(child, hushed); });
         }
-        ts.forEachChild(file, visit);
+
+        ts.forEachChild(file, function (child) { visit(child, false); });
 
         found.sort(function (a, b) { return a.pos - b.pos; });
         var errors = [];
         for (var j = 0; j < found.length; j++) {
             errors.push({
-                message: SYNC_ONLY_MESSAGES[found[j].kind],
-                type: SYNC_ONLY_TYPE,
+                message: found[j].message,
+                type: found[j].type,
                 line: file.getLineAndCharacterOfPosition(found[j].pos).line + 1,
             });
         }
@@ -267,7 +491,6 @@
     function syncOnlyRequested(options) {
         return !!(options && options.sync_only);
     }
-
     // ---------------------------------------------------------------------
     // TYPE_ARGUMENT_SCHEMAS: the author writes the type, the host gets the schema
     // ---------------------------------------------------------------------
@@ -730,10 +953,6 @@
     // leading comments first (same-length replacement: positions are preserved,
     // so lines and call ordinals are unaffected).
     function analyzeSource(source, sdkDts, options) {
-        // Host constraints first, and every occurrence of them: they are the
-        // reason the program cannot run at all.
-        var errors = syncOnlyRequested(options) ? syncOnlyErrors(source) : [];
-
         var ranges = ts.getLeadingCommentRanges(source, 0) || [];
         for (var i = 0; i < ranges.length; i++) {
             var idx;
@@ -743,6 +962,14 @@
         }
 
         var program = buildProgram(source, sdkDts);
+        // Environment constraints first, and every occurrence of them: they are
+        // the reason the program cannot run at all. The static path always has a
+        // Program, so the promise rules are always the checker-backed ones.
+        var errors = constraintErrors(
+            program.getSourceFile("/main.ts"),
+            program.getTypeChecker(),
+            syncOnlyRequested(options)
+        );
         errors = errors.concat(programErrors(program));
 
         // Extraction diagnostics come last: they are downstream of the type
@@ -779,17 +1006,27 @@
             }
         }
 
-        // sync-only is a host capability constraint, not an author preference:
-        // it is enforced ahead of the type check and *through* @ts-nocheck.
-        if (syncOnlyRequested(options)) {
-            var syncErrors = syncOnlyErrors(source);
-            if (syncErrors.length > 0) return { error: firstOf(syncErrors) };
+        // Environment constraints are not author preferences: they are enforced
+        // ahead of the type check and *through* @ts-nocheck. With the pragma no
+        // Program is built at all, so the walk runs over a bare parse and the
+        // promise rules take their conservative syntax form (see
+        // constraintErrors); without it the checker backs them exactly.
+        var errors;
+        if (noCheck) {
+            errors = constraintErrors(
+                ts.createSourceFile("/main.ts", source, TARGET, true),
+                undefined,
+                syncOnlyRequested(options)
+            );
+        } else {
+            var program = buildProgram(source, sdkDts);
+            errors = constraintErrors(
+                program.getSourceFile("/main.ts"),
+                program.getTypeChecker(),
+                syncOnlyRequested(options)
+            ).concat(programErrors(program));
         }
-
-        if (!noCheck) {
-            var errors = runCheck(source, sdkDts);
-            if (errors.length > 0) return { error: firstOf(errors) };
-        }
+        if (errors.length > 0) return { error: firstOf(errors) };
 
         // Erase types, whitespace-preserving. Unsupported (non-erasable) syntax
         // is reported instead of being passed through broken.
