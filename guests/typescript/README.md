@@ -26,6 +26,35 @@ make typescript-guest      # WASI_SDK=/path/to/wasi-sdk   (and cargo, for Wizer)
 6. **pre-initialize with [Wizer](https://github.com/bytecodealliance/wizer)** (see
    below), producing `tests/wasm/typescript_guest.wasm`
 
+### Reproducible builds
+
+The fixture is **byte-for-byte reproducible** on the pinned toolchain — the same
+inputs always produce the same `typescript_guest.wasm`. To check, drop the
+intermediates and rebuild (keeping the fetched sources and the native `qjsc`):
+
+```sh
+cd guests/typescript
+rm -f build/*_bc.c build/tsblank.js build/libs.js build/*.wasm
+./build.sh && sha256sum ../../tests/wasm/typescript_guest.wasm
+```
+
+Three things hold that up:
+
+- **The WASI SDK is pinned.** `WASI_SDK_VERSION` (default `25.0`) and
+  `WASI_SDK_CLANG_VERSION` (default `19.1.5`) are asserted against
+  `$WASI_SDK/VERSION` and `clang --version` before anything is compiled; a
+  mismatch aborts, naming the release to install. Codegen differs between clang
+  releases, so an unpinned compiler quietly breaks byte-stability.
+- **Wizer runs against a deterministic WASI** — see below.
+- **Payload generation is order-stable** (the lib map comes from a sorted
+  directory listing).
+
+Two smaller build-environment notes: the native `qjsc` is compiled with
+`-D_GNU_SOURCE`, which glibc requires for the `environ` declaration
+`quickjs-libc.c` reaches for; and the quickjs-ng fetch falls back from the
+GitHub archive tarball to `git clone --depth 1 --branch $QJS_VERSION`, since
+proxies commonly 403 the codeload redirect while allowing git over HTTPS.
+
 ## Two contexts, one rule
 
 - A persistent **compiler** context (tsc + the non-DOM `lib.es2020` chain + the
@@ -57,6 +86,21 @@ heap becomes data segments), but it stays a portable `.wasm`, not a
 Wasmtime-version-locked artifact. Wizer strips both its `wizer.initialize`
 entrypoint and the reactor's `_initialize` from the snapshot, so the host
 instantiates it directly with no re-init and no host-side change.
+
+**Determinism.** `wizen/` does *not* use Wizer's `allow_wasi(true)`; it installs
+the five WASI preview1 functions the guest actually imports (`clock_time_get`,
+`fd_close`, `fd_fdstat_get`, `fd_seek`, `fd_write` — there is no `random_get`,
+filesystem, env or args) through Wizer's `make_linker` hook, with the clocks
+pinned to a fixed epoch advanced a fixed step per read. Without that the
+snapshot is not reproducible: QuickJS seeds every context's PRNG from the wall
+clock (`js_random_init` → `js__gettimeofday_us()`), so the live seed lands in the
+baked data segments and two wizenings of the same base module differ.
+
+That constrains only what the *snapshot* bakes, never runtime behaviour — the
+host instantiates the finished module against its own real WASI, so `Date.now()`
+and `Math.random()` in user code read the real clock as usual. What persists is a
+fixed PRNG seed inside the pre-baked *compiler* context, which exists only to
+parse, check and type-erase source.
 
 ## Build internals & upstream shims
 

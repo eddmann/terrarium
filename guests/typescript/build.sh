@@ -18,12 +18,40 @@
 #      warm-up check once, offline, and snapshot the resulting heap into the
 #      module so ensure_compiler() is a no-op at runtime (see step 6 below)
 #
-# Build-time-only deps: a host C compiler, curl, python3 (JSON-encoding the lib
-# files), and cargo (the Wizer step). Nothing is needed at runtime or test time
-# (the fixture is committed).
+# Build-time-only deps: a host C compiler, curl, git (quickjs-ng fallback fetch),
+# python3 (JSON-encoding the lib files), and cargo (the Wizer step). Nothing is
+# needed at runtime or test time (the fixture is committed).
+#
+# ## Reproducibility
+#
+# The output is byte-for-byte reproducible on the pinned toolchain: the same
+# inputs always produce the same `tests/wasm/typescript_guest.wasm`. Three things
+# hold that up, and all three are load-bearing:
+#
+#   * The **WASI SDK is pinned** (`WASI_SDK_VERSION`, `WASI_SDK_CLANG_VERSION`)
+#     and asserted against the installed SDK below. Codegen differs between
+#     clang releases, so an unpinned compiler silently breaks byte-stability --
+#     this was the original gap.
+#   * **Wizer runs against a deterministic WASI** (see `wizen/src/main.rs`): the
+#     warm-up would otherwise bake the host wall clock, which QuickJS uses to
+#     seed each context's PRNG, into the snapshot's data segments.
+#   * The JS payload generation is order-stable (the lib map is built from a
+#     sorted directory listing).
+#
+# To verify: remove the intermediates and rebuild, keeping the fetched sources.
+#
+#   rm -f build/*_bc.c build/tsblank.js build/libs.js build/*.wasm && ./build.sh
+#
+# ## Fetching quickjs-ng
+#
+# The GitHub archive tarball is tried first, with a `git clone --depth 1
+# --branch $QJS_VERSION` fallback: proxies commonly 403 the codeload redirect
+# while allowing git over HTTPS. Both yield the same tree at the tag.
 set -euo pipefail
 
 WASI_SDK="${WASI_SDK:-/opt/wasi-sdk}"
+WASI_SDK_VERSION="${WASI_SDK_VERSION:-25.0}"
+WASI_SDK_CLANG_VERSION="${WASI_SDK_CLANG_VERSION:-19.1.5}"
 QJS_VERSION="${QJS_VERSION:-v0.15.1}"
 TS_VERSION="${TS_VERSION:-6.0.3}"
 TBS_VERSION="${TBS_VERSION:-0.9.0}"
@@ -35,20 +63,57 @@ QJS="$BUILD/quickjs-${QJS_VERSION}"
 CLANG="$WASI_SDK/bin/clang"
 [ -x "$CLANG" ] || { echo "WASI SDK clang not found at $CLANG (set WASI_SDK)"; exit 1; }
 
+# --- 0. assert the pinned WASI SDK -------------------------------------------
+# Byte-stability is only meaningful against a known compiler, so refuse to build
+# with an SDK other than the pin rather than emit a fixture nobody can reproduce.
+sdk_mismatch() {
+    cat >&2 <<EOF
+$1
+
+  expected: wasi-sdk $WASI_SDK_VERSION (clang $WASI_SDK_CLANG_VERSION)
+  found:    $WASI_SDK
+
+Install the pinned SDK from
+  https://github.com/WebAssembly/wasi-sdk/releases/tag/wasi-sdk-${WASI_SDK_VERSION%%.*}
+and point WASI_SDK at it. To build with a different SDK anyway (the fixture will
+not match the committed one byte-for-byte), set WASI_SDK_VERSION and
+WASI_SDK_CLANG_VERSION to what you have installed.
+EOF
+    exit 1
+}
+
+[ -f "$WASI_SDK/VERSION" ] || sdk_mismatch "No VERSION file at $WASI_SDK/VERSION -- cannot identify the WASI SDK."
+sdk_version="$(head -n 1 "$WASI_SDK/VERSION" | tr -d '[:space:]')"
+[ "$sdk_version" = "$WASI_SDK_VERSION" ] || sdk_mismatch "WASI SDK version mismatch: $WASI_SDK/VERSION reports '$sdk_version'."
+"$CLANG" --version | head -n 1 | grep -qF "$WASI_SDK_CLANG_VERSION" \
+    || sdk_mismatch "clang version mismatch: $("$CLANG" --version | head -n 1)"
+
 mkdir -p "$BUILD"
 
 # --- 1. quickjs-ng sources (shared pin with quickjs-guest) ------------------
+# Tarball first, git clone as the fallback (see the header): the two produce the
+# same tree, and the .git directory is dropped so they stay interchangeable.
 if [ ! -d "$QJS" ]; then
     echo "Fetching quickjs-ng $QJS_VERSION ..."
-    mkdir -p "$QJS"
-    curl -fsSL "https://github.com/quickjs-ng/quickjs/archive/refs/tags/${QJS_VERSION}.tar.gz" \
-        | tar xz -C "$QJS" --strip-components=1
+    rm -rf "$QJS.partial"
+    mkdir -p "$QJS.partial"
+    if ! curl -fsSL "https://github.com/quickjs-ng/quickjs/archive/refs/tags/${QJS_VERSION}.tar.gz" \
+        | tar xz -C "$QJS.partial" --strip-components=1; then
+        echo "  tarball fetch failed, falling back to git clone ..."
+        rm -rf "$QJS.partial"
+        git clone --quiet --depth 1 --branch "$QJS_VERSION" \
+            https://github.com/quickjs-ng/quickjs "$QJS.partial"
+        rm -rf "$QJS.partial/.git"
+    fi
+    mv "$QJS.partial" "$QJS"
 fi
 
 # --- 2. native qjsc (must be the same tree as the wasm engine) --------------
+# -D_GNU_SOURCE: quickjs-libc.c reaches for `environ`, which glibc only declares
+# under that feature macro (the WASI build gets it from wasi-libc regardless).
 if [ ! -x "$BUILD/qjsc" ]; then
     echo "Building native qjsc ..."
-    "$HOST_CC" -O2 -I"$QJS" -o "$BUILD/qjsc" \
+    "$HOST_CC" -O2 -D_GNU_SOURCE -I"$QJS" -o "$BUILD/qjsc" \
         "$QJS/qjsc.c" "$QJS/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" \
         "$QJS/dtoa.c" "$QJS/quickjs-libc.c" -lm -lpthread
 fi
