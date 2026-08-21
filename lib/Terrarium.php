@@ -59,13 +59,19 @@ final class Terrarium
      * run each eval in a fresh runtime either way, so guest program globals do
      * not carry across evals in either mode.
      *
-     * `syncOnly: true` asks a compiling guest to reject asynchronous and
-     * generator syntax outright. No guest drains a job queue, so an `await`
-     * never resumes; the TypeScript guest turns that into a compile error that
-     * names the construct and the synchronous alternative, at the source line.
-     * It is a host constraint rather than an author preference, so it holds
-     * even under `// @ts-nocheck`. Guests without a compiler accept the option
-     * and ignore it — they fail loudly at run time instead (see `eval()`).
+     * `syncOnly: true` asks a compiling guest to reject asynchronous code
+     * outright. No guest drains a job queue, so an `await` never resumes and a
+     * promise never settles; the TypeScript guest turns that into a compile
+     * error naming the construct, the synchronous alternative, and the source
+     * line. It covers `async`/`await`/`for await`/`function*`/`yield` AND every
+     * use of a promise — constructing one, naming the global, a call whose
+     * return type is one, or a `.then`/`.catch`/`.finally` on one — because a
+     * promise that cannot settle abandons its callbacks in silence. It is a
+     * host constraint rather than an author preference, so it holds even under
+     * `// @ts-nocheck` (where, with no type information to consult, the promise
+     * rules match on shape and are correspondingly conservative). Guests
+     * without a compiler accept the option and ignore it — they fail loudly at
+     * run time instead (see `eval()`).
      *
      * `typeArgumentSchemas: ['ctx.model', 'ctx.agent']` asks a compiling guest
      * to derive a JSON Schema from the single type argument of every call to
@@ -164,10 +170,16 @@ final class Terrarium
      *
      * A program that cannot finish because it is asynchronous fails loudly
      * rather than half-running: on the QuickJS-based guests (JavaScript,
-     * TypeScript) an eval that yields a Promise, or that leaves callbacks
-     * queued, raises a TerrariumGuestException of type `AsyncIncomplete` —
-     * there is no event loop to resume it. Output printed before that point is
-     * preserved, as with any other guest error.
+     * TypeScript) an eval that yields a Promise, leaves callbacks queued, or
+     * registered any promise reaction raises a TerrariumGuestException of type
+     * `AsyncIncomplete` — there is no event loop to resume it. Output printed
+     * before that point is preserved, as with any other guest error.
+     *
+     * One case escapes it, documented rather than papered over: `await` does
+     * not go through `Promise.prototype.then`, so a fire-and-forget async
+     * function suspended on a promise that never settles is invisible to the
+     * engine's public API. `syncOnly: true` (TypeScript) rejects that at
+     * compile time; see docs/errors.md.
      */
     public function eval(string $source): mixed
     {
@@ -186,9 +198,14 @@ final class Terrarium
      * guests report syntax/compile errors (`[]` means "compiles", not
      * "correct" — their type story stays in the editor via `types()`).
      *
-     * With `syncOnly: true`, the TypeScript guest also lists EVERY async or
-     * generator construct as a `TSSyncOnly` diagnostic, ahead of the type
-     * diagnostics and regardless of `@ts-nocheck`.
+     * With `syncOnly: true`, the TypeScript guest also lists EVERY async,
+     * generator or promise construct as a `TSSyncOnly` diagnostic, ahead of the
+     * type diagnostics and regardless of `@ts-nocheck`.
+     *
+     * Always on, with no option to set: the TypeScript guest reports syntax the
+     * sandbox ENGINE cannot parse — `accessor` class members today — as
+     * `TSEngineUnsupported`. The checker accepts those, so without this a clean
+     * `check()` would not mean "this will run".
      *
      * @return list<array{message: string, type?: string, line?: int}>
      */

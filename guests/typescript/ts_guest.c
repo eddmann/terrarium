@@ -28,10 +28,15 @@
  * queue), is handled at both ends:
  *  - compile time, opt-in: the host's compile options (reserved "$opts" cap)
  *    are passed to the driver per eval/check; with `sync_only` it rejects
- *    async/generator syntax as `TSSyncOnly` diagnostics, even under
- *    `@ts-nocheck` — it is a host constraint, not an author preference;
- *  - run time, always: an eval that yields a Promise or leaves jobs queued
- *    returns the sentinel typed `AsyncIncomplete` instead of half a run.
+ *    async/generator syntax AND every use of a promise as `TSSyncOnly`
+ *    diagnostics, even under `@ts-nocheck` — it is a host constraint, not an
+ *    author preference;
+ *  - run time, always: an eval that yields a Promise, leaves jobs queued, or
+ *    registered any promise reaction returns the sentinel typed
+ *    `AsyncIncomplete` instead of half a run.
+ *
+ * Syntax the ENGINE cannot parse but the checker accepts (`accessor` class
+ * members) is rejected by the driver as `TSEngineUnsupported`, always on.
  *
  * Two static exports, one analysis: `check` returns the diagnostics array (the
  * original contract, unchanged), `analyze` returns {diagnostics, schemas} —
@@ -277,6 +282,15 @@ static const char PRELUDE[] =
     "  var fmt = function(x){ return (typeof x === 'object' && x !== null) ? JSON.stringify(x) : String(x); };"
     "  var emit = function(){ __host('$out', Array.prototype.slice.call(arguments).map(fmt).join(' ')); };"
     "  return { log: emit, error: emit, warn: emit, info: emit, debug: emit };"
+    "})();"
+    /* Promise-reaction counter -- see async_incomplete_reason(), and the plain
+     * QuickJS guest's copy of this comment for the full reasoning. */
+    "(function(){"
+    "  var n = 0, proto = Promise.prototype, base = proto.then;"
+    "  Object.defineProperty(proto, 'then', {"
+    "    value: function(a, b){ n++; return base.call(this, a, b); },"
+    "    writable: true, configurable: true });"
+    "  Object.defineProperty(globalThis, '__terrariumReactions', { value: function(){ return n; } });"
     "})();";
 
 /* ------------------------------------------------------------------ */
@@ -363,12 +377,31 @@ static int64_t ret_error_exc(JSContext *ctx, JSValueConst exc) {
  *     called, so the chain's continuations never ran.
  *   - JS_IsJobPending on the user runtime — the program returned a plain value
  *     but left work behind it.
+ *   - the prelude's promise-reaction counter — a `.then` on a promise that
+ *     never settles queues no job at all, so neither check above sees it. The
+ *     full argument for why a non-zero count is a sound verdict (and the one
+ *     residual gap it does not close) is in guests/quickjs/quickjs_guest.c.
  *
  * This is on by default and independent of the `sync_only` compile option: the
  * option refuses the syntax up front (TypeScript only), this catches whatever
  * reaches run time anyway — `@ts-nocheck` source, a Promise built without
  * `async`/`await`, or any other guest. Returns the reason, or NULL. */
-static const char *async_incomplete_reason(JSRuntime *rt, JSValueConst v) {
+static int async_reactions(JSContext *ctx) {
+    JSValue g = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, g, "__terrariumReactions");
+    JS_FreeValue(ctx, g);
+    int n = 0;
+    if (JS_IsFunction(ctx, fn)) {
+        JSValue v = JS_Call(ctx, fn, JS_UNDEFINED, 0, NULL);
+        int32_t got = 0;
+        if (!JS_IsException(v) && JS_ToInt32(ctx, &got, v) == 0 && got > 0) n = (int)got;
+        JS_FreeValue(ctx, v);
+    }
+    JS_FreeValue(ctx, fn);
+    return n;
+}
+
+static const char *async_incomplete_reason(JSRuntime *rt, JSContext *ctx, JSValueConst v) {
     if (JS_IsPromise(v)) {
         return "asynchronous guest code cannot complete: the program evaluated to a Promise, and "
                "the job queue is never drained here, so its continuation never ran. Write "
@@ -378,6 +411,12 @@ static const char *async_incomplete_reason(JSRuntime *rt, JSValueConst v) {
         return "asynchronous guest code cannot complete: the program left queued jobs (a promise "
                "callback or an async continuation), and the job queue is never drained here, so "
                "they never ran. Write synchronous code — SDK calls return their values directly.";
+    }
+    if (async_reactions(ctx) > 0) {
+        return "asynchronous guest code cannot complete: the program registered a promise reaction "
+               "(`.then` / `.catch` / `.finally`), and the job queue is never drained here, so the "
+               "callback never ran — the promise it is waiting on can never settle. Write "
+               "synchronous code — SDK calls return their values directly.";
     }
     return NULL;
 }
@@ -678,7 +717,7 @@ int64_t eval(int32_t ptr, int32_t len) {
         } else {
             /* Same shape as a thrown exception: the $error sentinel, with
              * whatever was printed first left intact in the host's buffer. */
-            const char *stalled = async_incomplete_reason(rt, ures);
+            const char *stalled = async_incomplete_reason(rt, ctx, ures);
             if (stalled) {
                 out = ret_error_full(stalled, ASYNC_INCOMPLETE_TYPE, 0, 0);
             } else {

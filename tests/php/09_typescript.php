@@ -165,6 +165,21 @@ check('a returned promise is AsyncIncomplete even when resolved', function () us
     $ts = new Terrarium($wasm);
     throws(GuestException::class, fn () => $ts->eval('Promise.resolve(1)'));
 });
+check('a reaction on a promise that never settles is AsyncIncomplete too', function () use ($wasm) {
+    // The shape that queues no job and returns a plain value: without the
+    // prelude's reaction counter this returned 42 and dropped the callback.
+    $ts = new Terrarium($wasm);
+    $reached = false;
+    $ts->register('mark', function () use (&$reached) { $reached = true; });
+    try {
+        $ts->eval("const p = new Promise(() => {});\np.then(() => mark());\n42");
+        throw new RuntimeException('expected an AsyncIncomplete rejection');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'AsyncIncomplete');
+        contains($e->getMessage(), 'registered a promise reaction');
+    }
+    eq(false, $reached);
+});
 
 echo "\nsyncOnly: async and generator syntax is rejected at compile time\n";
 $rejects = function (string $label, string $source, int $line) use ($wasm) {

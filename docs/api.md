@@ -43,12 +43,20 @@ queue, so a program that suspends never resumes. Terrarium closes that hole from
 both ends.
 
 **At run time, always on.** On the QuickJS-based guests (JavaScript, TypeScript)
-an `eval` whose result is a `Promise` — in *any* state, since `.then` callbacks
-are queued rather than called — or that leaves jobs queued raises a
-`Terrarium\GuestException` of type **`AsyncIncomplete`**. Previously such a
-program half-ran in silence: an async IIFE returned a pending promise and its
-continuation was dead code. Output printed before the suspension is preserved,
-as with any other guest error.
+an `eval` raises a `Terrarium\GuestException` of type **`AsyncIncomplete`** when
+any of three things holds afterwards:
+
+1. **the result is a `Promise`** — in *any* state, since `.then` callbacks are
+   queued rather than called, so even a "resolved" chain's continuations never
+   ran;
+2. **jobs are queued** — the program returned a plain value but left work behind
+   it;
+3. **a promise reaction was registered** — any `.then` / `.catch` / `.finally`
+   during the eval.
+
+Previously such a program half-ran in silence: an async IIFE returned a pending
+promise and its continuation was dead code. Output printed before the suspension
+is preserved, as with any other guest error.
 
 ```php
 $js->eval('(async () => { console.log("before"); await 1; save(); })()');
@@ -57,6 +65,17 @@ $js->eval('(async () => { console.log("before"); await 1; save(); })()');
 // drained here, so its continuation never ran. …
 echo $js->output();   // "before"  — save() never ran
 ```
+
+The third check closes the gap the first two leave. In
+`const p = new Promise(() => {}); p.then(save); 42` the result is `42` *and*
+nothing is queued — a reaction on a promise that never settles never becomes a
+job — so without it the eval returned 42 and dropped `save` without a word.
+[errors.md](errors.md#exactly-what-asyncincomplete-catches-and-what-it-does-not)
+sets out how the count is made, why it is sound, and **the one case it still
+cannot see**: `await` bypasses `Promise.prototype.then`, so a fire-and-forget
+async function suspended on a promise that never settles stays invisible to the
+engine's public API. That is a documented limitation, not a guarantee — and
+`syncOnly` is what actually rules it out.
 
 **At compile time, opt in with `syncOnly: true`.** The **TypeScript** guest
 walks the parsed source and rejects every `async` function (declaration,
@@ -73,18 +92,43 @@ $ts->eval('const rows = await db.query("…");');
 // `await` and use the returned value. (line 1)
 ```
 
-Because this is an AST walk and not a text search, prose is safe: a string
-literal or comment containing *"we await your reply"* is not a violation, and
-neither is an identifier or property merely named `async` or `await`.
+**Promises go with them, keyword or no keyword.** A promise needs a job queue to
+settle and there isn't one, so the ban covers the whole family: the global
+`Promise` (constructed, named, or written in a type), any expression whose type
+is a promise — including a capability that returns one — and any
+`.then`/`.catch`/`.finally` on one.
 
-Two properties worth knowing:
+```php
+$ts->check('const p = new Promise(() => {}); p.then(save); 42');
+// [ TSSyncOnly (line 1) `Promise` cannot be used here: promises cannot settle
+//     in a synchronous guest … ,
+//   TSSyncOnly (line 1) `.then` / `.catch` / `.finally` cannot run here … ]
+```
+
+Because this is a walk over the *checked* program and not a text search, prose
+is safe: a string literal or comment containing *"we await your reply"* is not a
+violation, neither is an identifier or property merely named `async` or `await`,
+a class of your own called `Promise` is not the global one, and an object with
+an ordinary `then(cb)` method of its own is not a promise (a thenable's `then`
+hands back another thenable; that one returns `void`).
+
+Three properties worth knowing:
 
 - **`// @ts-nocheck` does not disable it.** The pragma opts out of the *type*
   check — an author's preference about their own annotations. `syncOnly` is a
   constraint of the host, which genuinely cannot finish such a program, so the
-  walk runs regardless.
+  walk runs regardless. With the pragma there is no Program to consult, so the
+  promise rules fall back to *shape*: `new Promise`, the identifier `Promise`,
+  and a call through a member named `then`/`catch`/`finally`. The last of those
+  over-matches an object with a `then` method of its own — a deliberate trade,
+  because opting out of the type information is what removed the precision.
+  Drop the pragma and matching is exact again. (`check()` always builds a
+  Program, so it stays precise either way.)
 - **`eval()` reports the first violation** (and counts the rest, as with type
   errors); **`check()` lists every one**, ahead of the type diagnostics.
+- **Every occurrence is listed**, so a promise-returning capability used in
+  three places yields three diagnostics — one per expression, reported at the
+  outermost promise-typed node, so a chain is not reported over and over.
 
 Guests without a compiler (JavaScript, Python, PHP) accept the option and do
 nothing with it — only the TypeScript guest has an AST to enforce it against.

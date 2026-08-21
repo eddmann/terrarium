@@ -33,21 +33,69 @@ returns any `SyntaxError` as a diagnostic (`[]` = parses).
 
 Nothing calls `JS_ExecutePendingJob`, so the job (microtask) queue is never
 drained and a program that suspends never resumes. Rather than half-run it in
-silence, `eval` inspects the result before marshaling it and returns the
-`$error` sentinel typed **`AsyncIncomplete`** when either holds:
+silence, `eval` asks three questions before marshaling the result, and returns
+the `$error` sentinel typed **`AsyncIncomplete`** when any of them says yes:
 
 - **the result is a `Promise`** (`JS_IsPromise`), in *any* state — an
   already-fulfilled promise still failed, because `.then` callbacks are queued
   rather than called, so the chain's continuations never ran;
 - **jobs are queued** (`JS_IsJobPending`) — the program returned a plain value
-  but left work behind it.
+  but left work behind it;
+- **a promise reaction was registered** — any `.then` / `.catch` / `.finally`
+  during the eval, counted by an instrument the prelude installs ahead of user
+  code.
 
-This is on by default and not configurable: it reports a fact about the
-environment. Whatever the program printed first is preserved in `output()`,
+### Why the third check exists, and why it is sound
+
+The first two missed a whole shape, which is how it was reported:
+
+```js
+const p = new Promise(() => {});
+p.then(() => mark());
+42
+```
+
+The result is `42`, not a promise. And **no job is queued**: a reaction on a
+*pending* promise is stored on the promise and becomes a job only when it
+settles, which this one never does. Both guards passed, `eval` returned 42, and
+`mark()` was abandoned without a word — precisely the failure the guards exist
+to eliminate.
+
+QuickJS's public C API cannot see it: there is no way to enumerate a pending
+promise's reactions. So the count is made in JS, by wrapping
+`Promise.prototype.then` in the prelude. `catch` and `finally` are specified in
+terms of `then`, and quickjs-ng implements them that way, so the one wrapper
+also covers `Promise.all` / `race` / `any` / `allSettled`.
+
+A non-zero count is a **sound** verdict, not a heuristic. Under a queue that is
+never drained, a reaction registered on an already-settled promise becomes a job
+that never runs (which check 2 catches anyway), and a reaction registered on a
+pending promise never becomes anything at all. Either way the callback provably
+did not run — so *any* reaction registered during an eval is abandoned work, and
+nothing is ever failed for work that actually happened, because under these
+rules no such work can exist.
+
+**The residual gap, stated rather than papered over.** `await` does not go
+through `Promise.prototype.then` — the engine uses an internal path — so a
+fire-and-forget async function suspended on a promise that never settles is
+invisible to all three checks:
+
+```js
+(async () => { await new Promise(() => {}); mark(); })();   // result discarded
+42                                                          // eval returns 42
+```
+
+Nothing in the engine's public API can detect that, and this guest does not
+pretend otherwise. The TypeScript guest's `sync_only` rejects it at compile
+time; here it is a documented limitation.
+
+All three checks are on by default and not configurable: they report facts about
+the environment. Whatever the program printed first is preserved in `output()`,
 exactly as for a thrown exception. The `sync_only` compile option (reserved
 `$opts` capability) is *accepted* here but not implemented — there is no
 compiler to enforce it against; see the
-[TypeScript guest](../typescript/README.md), which rejects the syntax up front.
+[TypeScript guest](../typescript/README.md), which rejects both the syntax and
+every use of a promise up front.
 
 ## Notes
 

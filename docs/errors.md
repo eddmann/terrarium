@@ -73,9 +73,10 @@ types are Terrarium's own, and are the ones worth matching on:
 |---|---|---|
 | `TS<code>` | TypeScript guest | a type diagnostic — the compiler's own code (`TS2345`, `TS2322`, …) |
 | `TSSyntaxError` | TypeScript guest | syntax that cannot be type-erased (`enum`, `namespace`, …) |
-| `TSSyncOnly` | TypeScript guest, with `syncOnly: true` | `async`, `await`, `for await`, `function*`, `yield` — rejected before anything runs |
+| `TSSyncOnly` | TypeScript guest, with `syncOnly: true` | `async`, `await`, `for await`, `function*`, `yield`, and every use of a promise — rejected before anything runs |
+| `TSEngineUnsupported` | TypeScript guest, **always** | syntax the sandbox engine cannot parse though the checker accepts it (`accessor` class members) |
 | `TSSchemaError` | TypeScript guest, with `typeArgumentSchemas:` | a matched call's type argument has no JSON Schema form — a **static** diagnostic only, carrying the call `ordinal` and the offending member path |
-| `AsyncIncomplete` | QuickJS + TypeScript guests, **always** | the eval produced a `Promise`, or left jobs queued: nothing drains the job queue, so it can never finish |
+| `AsyncIncomplete` | QuickJS + TypeScript guests, **always** | the eval produced a `Promise`, left jobs queued, or registered a promise reaction: nothing drains the job queue, so it can never finish |
 
 `AsyncIncomplete` is the loud version of a failure that used to be silent. The
 sandbox has no event loop, so an async program half-ran and looked fine:
@@ -89,9 +90,50 @@ try {
 }
 ```
 
+### Exactly what `AsyncIncomplete` catches, and what it does not
+
+Three independent checks run after every JS/TS eval, in this order. Each names
+itself in the message:
+
+1. **the result is a `Promise`**, in any state (`JS_IsPromise`);
+2. **jobs are queued** at the end of the eval (`JS_IsJobPending`) — which is
+   what a settled promise's reactions become;
+3. **any promise reaction was registered** during the eval — a
+   `.then`/`.catch`/`.finally`, counted by an instrument the guest prelude
+   installs before user code runs.
+
+Check 3 exists because 1 and 2 together miss a whole class:
+`const p = new Promise(() => {}); p.then(f); 42`. The result is `42` and *no job
+is queued* — a reaction on a promise that never settles is stored on the
+promise and only becomes a job when it settles. Both of the first two checks
+pass and `f` is abandoned in silence. The engine's public C API cannot enumerate
+a pending promise's reactions, so the count is made in JS instead; it is a sound
+verdict on its own, because under a queue that is never drained *no* reaction
+ever runs, whether it became a job or not.
+
+**The documented limitation.** `await` does not go through
+`Promise.prototype.then` — the engine uses an internal path — so a fire-and-forget
+async function suspended on a promise that never settles is still invisible to
+all three checks:
+
+```js
+(async () => { await new Promise(() => {}); save(); })();   // result discarded
+42                                                          // eval returns 42
+```
+
+Nothing in the public QuickJS API can see that, and Terrarium does not pretend
+otherwise. The TypeScript guest's [`syncOnly: true`](api.md#synchronous-only-guests)
+rejects it at compile time; on the plain JavaScript guest it remains undetected.
+
 `TSSyncOnly` is the same hazard caught a step earlier, at compile time, when the
-host opts in with [`syncOnly: true`](api.md#synchronous-only-guests). Both are
-`Terrarium\GuestException`s; neither poisons the instance.
+host opts in. Both are `Terrarium\GuestException`s; neither poisons the instance.
+
+`TSEngineUnsupported` is a different kind of honesty: the checker's library
+declares more than the engine implements, and where the engine cannot even
+*parse* something the checker accepts, refusing at check time is the only way a
+clean `check()` keeps meaning "this will run". It is always on and is not
+skipped by `// @ts-nocheck` — it states a fact about the engine, not a
+preference about the source.
 
 ## Static validation vs. runtime errors
 
