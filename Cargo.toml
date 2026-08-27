@@ -1,6 +1,6 @@
 [package]
 name = "terrarium"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "Expose a typed PHP SDK to a sandboxed guest language (JS/TS/Python/PHP) running inside a WebAssembly isolation boundary"
 license = "MIT"

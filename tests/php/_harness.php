@@ -12,6 +12,12 @@ $GLOBALS['fail'] = 0;
 
 function check(string $label, callable $fn): void
 {
+    // An OS alarm kills a stuck native guest even when PHP cannot regain
+    // control. A broken interruption regression must fail, not hang CI.
+    if (function_exists('pcntl_alarm')) {
+        pcntl_signal(SIGALRM, SIG_DFL);
+        pcntl_alarm(60);
+    }
     try {
         $fn();
         printf("  ok   %s\n", $label);
@@ -19,6 +25,10 @@ function check(string $label, callable $fn): void
     } catch (Throwable $e) {
         printf("  FAIL %s\n         %s: %s\n", $label, get_class($e), $e->getMessage());
         $GLOBALS['fail']++;
+    } finally {
+        if (function_exists('pcntl_alarm')) {
+            pcntl_alarm(0);
+        }
     }
 }
 

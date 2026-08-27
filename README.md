@@ -161,6 +161,26 @@ make test       # Rust unit tests + the PHP suites
 
 → Full matrix, Docker, and AWS Lambda / Bref instructions: **[docs/install.md](docs/install.md)**.
 
+## Reuse with a remaining time budget
+
+Keep a Runtime warm while setting a separate timeout for each operation:
+
+```php
+$rt = new \Terrarium\Runtime($wasmBytes, isolated: false);
+$diagnostics = $rt->check($source, timeoutMs: 5000);
+if ($diagnostics === []) {
+    $result = $rt->eval($source, timeoutMs: 3000);
+}
+$rt->reset(); // drops the guest instance, retaining Engine/InstancePre
+```
+
+Recompute the remaining time before each call. Explicit positive timeouts cover
+guest initialization too; omitted/null uses the constructor default with its
+existing setup exemption. Zero means unbounded; negative overrides are rejected.
+PHP callbacks cannot be preempted, so cap blocking I/O separately. Reset retains
+host callbacks, declarations, options, output and handles: clean up captured
+session context yourself. See [the full contract](docs/api.md#per-call-timeouts).
+
 ## How it works
 
 ```

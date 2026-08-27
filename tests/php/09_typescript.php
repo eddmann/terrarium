@@ -500,4 +500,97 @@ check('values marshal both ways through the SDK', function () use ($wasm) {
     eq(15, $ts->eval('sum([1, 2, 3, 4, 5])'));
 });
 
+echo "\nwarm reuse with per-call timeouts\n";
+check('complete check then eval reuse one TypeScript Runtime with shrinking budgets', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $rt->setCompileOptions(['sync_only' => true]);
+    foreach ([10000, 9000, 8000] as $timeout) {
+        eq([], $rt->check('const n: number = 21; n * 2;', timeoutMs: $timeout));
+        eq(42, $rt->eval('const n: number = 21; n * 2;', timeoutMs: $timeout - 1000));
+    }
+    throws(TimeoutException::class, fn () => $rt->eval('while (true) {}', timeoutMs: 100));
+    eq(false, $rt->reset());
+    eq([], $rt->check('const n: number = 42; n;', timeoutMs: 10000));
+    eq(42, $rt->eval('const n: number = 42; n;', timeoutMs: 10000));
+    eq(true, $rt->reset());
+    eq(42, $rt->eval('42', timeoutMs: 10000));
+});
+
+check('warm callbacks, declarations and options replace without retaining old context', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $context = (object) ['value' => 7];
+    $weak = WeakReference::create($context);
+    $rt->register('__wire.value', static fn (): int => $context->value);
+    $rt->setTypes('declare const __wire: { value(): number };');
+    unset($context);
+    eq([], $rt->check('const n: number = __wire.value(); n;', timeoutMs: 10000));
+    eq(7, $rt->eval('__wire.value()', timeoutMs: 10000));
+    eq(true, $weak->get() !== null);
+
+    $rt->register('__wire.value', static fn (): string => 'current');
+    $rt->setTypes('declare const __wire: { value(): string };');
+    eq(null, $weak->get());
+    eq(['__wire.value'], $rt->manifest());
+    eq(true, count($rt->check('const n: number = __wire.value(); n;', timeoutMs: 10000)) > 0);
+    throws(GuestException::class, fn () => $rt->eval('const n: number = __wire.value(); n;', timeoutMs: 10000));
+    eq('current', $rt->eval('__wire.value()', timeoutMs: 10000));
+
+    $rt->setCompileOptions(['sync_only' => true]);
+    eq('TSSyncOnly', $rt->check('async function f() { return 1; }', timeoutMs: 10000)[0]['type']);
+    $rt->setCompileOptions([]);
+    eq([], $rt->check('async function f() { return 1; }', timeoutMs: 10000));
+
+    $rt->setCompileOptions(['sync_only' => true]);
+    $resource = new stdClass;
+    $handle = $rt->grant($resource);
+    eq('current', $rt->eval('console.log("saved"); __wire.value()', timeoutMs: 10000));
+    eq(true, $rt->reset());
+    eq(false, $rt->reset());
+    eq('saved', $rt->output());
+    eq($resource, $rt->resolve($handle));
+    eq('TSSyncOnly', $rt->check('async function f() { return 1; }', timeoutMs: 10000)[0]['type']);
+    eq(true, count($rt->check('const n: number = __wire.value();', timeoutMs: 10000)) > 0);
+    eq('current', $rt->eval('__wire.value()', timeoutMs: 10000));
+    eq('', $rt->output());
+    eq(true, $rt->revoke($handle));
+});
+
+check('timed calls preserve output and program error contracts', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    eq(42, $rt->eval('console.log("saved"); 42', timeoutMs: 10000));
+    foreach (['eval', 'check', 'analyze'] as $entry) {
+        throws(TerrariumException::class, fn () => $rt->$entry('1', timeoutMs: -1));
+        throws(TerrariumException::class, fn () => $rt->$entry('1', timeoutMs: []));
+        eq('saved', $rt->output());
+    }
+    eq([], $rt->check('42', timeoutMs: 10000));
+    eq('saved', $rt->output());
+    eq(['diagnostics' => [], 'schemas' => []], $rt->analyze('42', timeoutMs: 10000));
+    eq('saved', $rt->output());
+    throws(GuestException::class, fn () => $rt->eval('console.log("before"); throw new Error("boom");', timeoutMs: 10000));
+    eq('before', $rt->output());
+    eq(true, $rt->reset()); // an ordinary guest error did not poison the Store
+
+    $rt->register('pause', static function (): int { usleep(1_200_000); return 1; });
+    $rt->setTypes('declare function pause(): number;');
+    // Warm the compiler, then expire while PHP is blocked. It finishes the
+    // callback, but cannot run the next statement or return a late success.
+    eq([], $rt->check('console.log("partial"); pause(); console.log("late");', timeoutMs: 10000));
+    throws(TimeoutException::class, fn () => $rt->eval('console.log("partial"); pause(); console.log("late");', timeoutMs: 1000));
+    eq('partial', $rt->output());
+    eq(false, $rt->reset());
+    eq(42, $rt->eval('42', timeoutMs: 10000));
+    eq('', $rt->output());
+});
+
+check('facade forwards named timeouts to check and analyze as well as eval', function () use ($wasm) {
+    $ts = new Terrarium($wasm);
+    eq([], $ts->check('42', timeoutMs: 10000));
+    eq(['diagnostics' => [], 'schemas' => []], $ts->analyze('42', timeoutMs: 10000));
+    eq(42, $ts->eval('42', timeoutMs: 10000));
+    foreach (['eval', 'check', 'analyze'] as $entry) {
+        throws(TerrariumException::class, fn () => $ts->$entry('42', timeoutMs: -1));
+    }
+});
+
 summary();

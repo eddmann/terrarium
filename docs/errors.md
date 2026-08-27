@@ -31,6 +31,17 @@ try {
 }
 ```
 
+An explicit per-call timeout can also expire during Wasm start or `_initialize`.
+The partial instance is discarded, and the same Runtime can be retried with a
+new budget. Timeouts use the existing `TimeoutException`; check/analyze still
+return diagnostics as data for source errors, but a sandbox timeout is an
+exception. See [timeout scope and callback limitations](api.md#per-call-timeouts).
+
+Invalid per-call timeout arguments raise the base exception before touching
+output. Output printed before a timeout remains readable, just as after a guest
+error. Check/analyze/reset never clear output. A timeout does not undo PHP
+callback side effects, and cannot interrupt PHP while it is blocked.
+
 ## The two layers
 
 **Sandbox-level faults** are the engine aborting the call — a Wasmtime trap or a
