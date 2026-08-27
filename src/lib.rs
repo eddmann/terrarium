@@ -32,19 +32,17 @@ use ext_php_rs::prelude::*;
 use ext_php_rs::types::Zval;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use wasmtime::{
     Caller, Config, Engine, Instance, InstancePre, Linker, Module, Store, StoreLimits,
-    StoreLimitsBuilder, Trap,
+    StoreLimitsBuilder, Trap, UpdateDeadline,
 };
 
 mod bridge;
 mod exceptions;
 mod handles;
 mod marshal;
+mod timeout;
 
 use bridge::{decode_args, BridgeState};
 use exceptions::{
@@ -52,12 +50,14 @@ use exceptions::{
     TerrariumTimeoutException, TerrariumTrapException,
 };
 use marshal::{middle_to_zval, zval_to_middle, MiddleValue};
+use timeout::{deadline_after, expired, CallTimeout, EpochTimer, TimeoutMs};
 
 /// Per-`Store` data: the `StoreLimits` the `ResourceLimiter` hook reads, plus a
 /// WASI context for guests that link a libc (capability-only guests never touch it).
 struct StoreState {
     limits: StoreLimits,
     wasi: wasmtime_wasi::p1::WasiP1Ctx,
+    deadline: Option<Instant>,
 }
 
 /// A persistent store + its instantiated guest (shared mode).
@@ -125,9 +125,9 @@ impl Terrarium {
         if let Ok(cache) = wasmtime::Cache::from_file(None) {
             config.cache(Some(cache));
         }
-        if timeout_ms > 0 {
-            config.epoch_interruption(true);
-        }
+        // A runtime constructed unbounded can still receive a timed call later.
+        // Instrumentation must be enabled before compiling the module.
+        config.epoch_interruption(true);
         if fuel > 0 {
             config.consume_fuel(true);
         }
@@ -253,12 +253,16 @@ impl Terrarium {
     /// `(retPtr << 32) | retLen` into the guest's memory. A guest-side program
     /// error comes back as the sentinel map `{ "$error": "<message>" }`, which
     /// is raised here as a `TerrariumGuestException` rather than returned.
-    pub fn eval(&self, source: String) -> PhpResult<Zval> {
+    /// A positive timeoutMs includes guest setup; null retains the constructor
+    /// default's setup exemption, zero is unbounded, and negatives are rejected.
+    #[php(defaults(timeoutMs = None))]
+    pub fn eval(&self, source: String, timeoutMs: Option<TimeoutMs>) -> PhpResult<Zval> {
+        let timeout = self.call_timeout(timeoutMs)?;
         // Each run captures its own output; a guest error leaves what was
         // printed before the crash readable via `output()`.
         self.state.clear_output();
 
-        let middle = self.call_entry("eval", source)?;
+        let middle = self.call_entry("eval", source, timeout)?;
 
         // A guest program error surfaces as the `{ "$error": ... }` sentinel,
         // where the value is either a plain message string or a structured
@@ -282,8 +286,10 @@ impl Terrarium {
     /// and the output buffer is untouched. Guests without the export raise a
     /// `TerrariumException`. A `$error` sentinel here is an internal guest
     /// failure (e.g. its compiler failed to start), not a program error.
-    pub fn check(&self, source: String) -> PhpResult<Zval> {
-        self.static_entry("check", source)
+    /// timeoutMs has the same per-call semantics as eval.
+    #[php(defaults(timeoutMs = None))]
+    pub fn check(&self, source: String, timeoutMs: Option<TimeoutMs>) -> PhpResult<Zval> {
+        self.static_entry("check", source, self.call_timeout(timeoutMs)?)
     }
 
     /// The full static analysis of guest source: the same diagnostics `check()`
@@ -300,8 +306,10 @@ impl Terrarium {
     /// The **TypeScript** guest fills `schemas` when the `type_argument_schemas`
     /// compile option names the callees to extract from (see
     /// `setCompileOptions`); with no such option it is always empty.
-    pub fn analyze(&self, source: String) -> PhpResult<Zval> {
-        self.static_entry("analyze", source)
+    /// timeoutMs has the same per-call semantics as eval.
+    #[php(defaults(timeoutMs = None))]
+    pub fn analyze(&self, source: String, timeoutMs: Option<TimeoutMs>) -> PhpResult<Zval> {
+        self.static_entry("analyze", source, self.call_timeout(timeoutMs)?)
     }
 
     /// The guest output (`console.log` / `print`) captured during the most
@@ -319,14 +327,28 @@ impl Terrarium {
 }
 
 impl Terrarium {
+    fn call_timeout(&self, timeout_ms: Option<TimeoutMs>) -> PhpResult<CallTimeout> {
+        let timeout_ms = timeout_ms
+            .map(TimeoutMs::value)
+            .transpose()
+            .map_err(PhpException::from_class::<TerrariumException>)?;
+        CallTimeout::new(timeout_ms, self.timeout_ms)
+            .map_err(PhpException::from_class::<TerrariumException>)
+    }
+
     /// A guest's optional static entrypoint (`check`, `analyze`): analysis only,
     /// nothing runs, and the output buffer is untouched. Whatever the guest
     /// returns is marshaled through unchanged — the transport is shape-agnostic,
     /// so a guest can widen its result without an ABI change. A `$error`
     /// sentinel here is an internal guest failure (e.g. its compiler failed to
     /// start), not a program error, so it raises the base exception.
-    fn static_entry(&self, entry: &'static str, source: String) -> PhpResult<Zval> {
-        let middle = self.call_entry(entry, source)?;
+    fn static_entry(
+        &self,
+        entry: &'static str,
+        source: String,
+        timeout: CallTimeout,
+    ) -> PhpResult<Zval> {
+        let middle = self.call_entry(entry, source, timeout)?;
 
         if let MiddleValue::Map(entries) = &middle {
             if let [(key, detail)] = entries.as_slice() {
@@ -343,12 +365,17 @@ impl Terrarium {
     /// Marshal `source` into guest memory, invoke the named `(i32, i32) -> i64`
     /// entrypoint (`eval`, or a guest's optional `check` / `analyze`), and decode
     /// the packed result — the shared byte-ABI round trip.
-    fn call_entry(&self, entry: &'static str, source: String) -> PhpResult<MiddleValue> {
+    fn call_entry(
+        &self,
+        entry: &'static str,
+        source: String,
+        timeout: CallTimeout,
+    ) -> PhpResult<MiddleValue> {
         let bytes = MiddleValue::Str(source)
             .to_msgpack()
             .map_err(|e| PhpException::from_class::<TerrariumException>(format!("encode: {e}")))?;
 
-        self.with_instance(move |store, instance| {
+        self.with_instance(timeout, move |store, instance| {
             let memory = instance
                 .get_memory(&mut *store, "memory")
                 .ok_or_else(|| no_export("memory"))?;
@@ -360,12 +387,14 @@ impl Terrarium {
                 .map_err(|_| no_export(entry))?;
 
             // Write the source into guest-owned memory, then call the entry.
+            check_deadline(store.data().deadline)?;
             let ptr = alloc
                 .call(&mut *store, bytes.len() as i32)
                 .map_err(map_err)?;
             memory
                 .write(&mut *store, ptr as usize, &bytes)
                 .map_err(|e| map_err(e.into()))?;
+            check_deadline(store.data().deadline)?;
             let packed = entryf
                 .call(&mut *store, (ptr, bytes.len() as i32))
                 .map_err(map_err)?;
@@ -391,17 +420,11 @@ impl Terrarium {
     /// (created lazily), reused across calls.
     fn with_instance<R>(
         &self,
+        timeout: CallTimeout,
         f: impl FnOnce(&mut Store<StoreState>, &Instance) -> PhpResult<R>,
     ) -> PhpResult<R> {
         if self.isolated {
-            let mut store = self.fresh_store();
-            // `fresh_store` pre-arms the epoch deadline, so instantiate and the
-            // reactor's `_initialize` run without tripping. `arm` then sets this
-            // call's fuel budget and re-arms the deadline just before `guarded`.
-            let instance = self.instance_pre.instantiate(&mut store).map_err(map_err)?;
-            initialize_reactor(&mut store, &instance)?;
-            self.arm(&mut store)?;
-            return self.guarded(|| f(&mut store, &instance));
+            return self.run_instance(&mut None, timeout, f);
         }
 
         // Shared: one persistent instance, reused. `try_borrow_mut` turns a
@@ -413,33 +436,58 @@ impl Terrarium {
                     .to_owned(),
             )
         })?;
-        if slot.is_none() {
-            let mut store = self.fresh_store();
-            let instance = self.instance_pre.instantiate(&mut store).map_err(map_err)?;
-            initialize_reactor(&mut store, &instance)?;
-            *slot = Some(Persistent { store, instance });
-        }
-        let Persistent { store, instance } = slot.as_mut().unwrap();
-        self.arm(store)?;
-        let instance = *instance;
-        let result = self.guarded(|| f(store, &instance));
+        self.run_instance(&mut slot, timeout, f)
+    }
+
+    fn run_instance<R>(
+        &self,
+        slot: &mut Option<Persistent>,
+        timeout: CallTimeout,
+        f: impl FnOnce(&mut Store<StoreState>, &Instance) -> PhpResult<R>,
+    ) -> PhpResult<R> {
+        let setup_deadline = timeout.setup_deadline();
+        let result = self.guarded(setup_deadline, || {
+            if slot.is_none() {
+                let mut store = self.fresh_store(setup_deadline);
+                check_deadline(setup_deadline)?;
+                let instance = self.instance_pre.instantiate(&mut store).map_err(map_err)?;
+                check_deadline(setup_deadline)?;
+                initialize_reactor(&mut store, &instance)?;
+                check_deadline(setup_deadline)?;
+                *slot = Some(Persistent { store, instance });
+            }
+            let Persistent { store, instance } = slot.as_mut().unwrap();
+            self.arm_fuel(store)?;
+            match timeout {
+                CallTimeout::Legacy(ms) => {
+                    // Omitted/null preserves the constructor's setup exemption.
+                    let deadline = deadline_after(ms)
+                        .map_err(PhpException::from_class::<TerrariumException>)?;
+                    arm_deadline(store, deadline);
+                    self.guarded(deadline, || f(store, instance))
+                }
+                CallTimeout::Explicit(deadline) => {
+                    // Rearm the epoch, not the clock: setup spent this budget too.
+                    arm_deadline(store, deadline);
+                    check_deadline(deadline)?;
+                    f(store, instance)
+                }
+            }
+        });
         // A sandbox-level fault (trap, timeout, memory) poisons the instance --
         // guest state may be mid-mutation (e.g. an interrupted language-runtime
         // startup). Drop it so the next call instantiates fresh; guest-program
         // errors (the $error sentinel) return Ok and never take this path.
         if result.is_err() {
             *slot = None;
+        } else if let Some(persistent) = slot {
+            persistent.store.data_mut().deadline = None;
         }
         result
     }
 
-    /// A fresh `Store` carrying this guest's memory limit. The epoch deadline is
-    /// armed here, at creation, because `instantiate()` runs guest code (a wasm
-    /// start function / global initializers) and a WASI reactor's `_initialize`
-    /// *before* the per-call `arm()` — and with `epoch_interruption` enabled a
-    /// store's default deadline is 0, which would trap that pre-call code instantly.
-    /// The per-call fuel budget and epoch re-arm still happen in `arm()`.
-    fn fresh_store(&self) -> Store<StoreState> {
+    /// Configure interruption before instantiate/start/_initialize can run.
+    fn fresh_store(&self, deadline: Option<Instant>) -> Store<StoreState> {
         let limits = {
             let mut b = StoreLimitsBuilder::new();
             if self.memory_limit > 0 {
@@ -448,66 +496,73 @@ impl Terrarium {
             b.build()
         };
         let wasi = wasmtime_wasi::WasiCtxBuilder::new().build_p1();
-        let mut store = Store::new(&self.engine, StoreState { limits, wasi });
+        let mut store = Store::new(
+            &self.engine,
+            StoreState {
+                limits,
+                wasi,
+                deadline,
+            },
+        );
         store.limiter(|s| &mut s.limits);
-        // Give setup (instantiate + `_initialize`) headroom before the per-call
-        // budget is armed. Both are needed because that code runs *before* `arm()`
-        // and a fresh store starts sealed: with `epoch_interruption` the default
-        // deadline is 0 (traps at once), and with `consume_fuel` the fuel is 0
-        // (out of fuel at once). Setup runs unmetered — the wall-clock timer only
-        // starts in `guarded()` around the eval — so fuel setup is exempt too, for
-        // symmetry; `arm()` then establishes this call's real budget for the eval.
-        if self.timeout_ms > 0 {
-            store.set_epoch_deadline(1);
-        }
+        store.epoch_deadline_callback(|store| {
+            if expired(store.data().deadline) {
+                return Err(Trap::Interrupt.into());
+            }
+            // Isolated nested calls share an Engine. A tick from another call
+            // must not expire this Store before its own deadline (or at all
+            // when unbounded). The expiring operation keeps ticking until exit.
+            Ok(UpdateDeadline::Continue(1))
+        });
+        store.set_epoch_deadline(1);
+        // Keep the existing fuel contract: setup is exempt, even when timed.
         if self.fuel > 0 {
             let _ = store.set_fuel(u64::MAX);
         }
         store
     }
 
-    /// Arm this call's fuel budget and wall-clock deadline on `store`. Re-armed
-    /// each call so a shared store gets a fresh budget every time.
-    fn arm(&self, store: &mut Store<StoreState>) -> PhpResult<()> {
+    /// Each operation gets the configured fuel budget, after guest setup.
+    fn arm_fuel(&self, store: &mut Store<StoreState>) -> PhpResult<()> {
         if self.fuel > 0 {
             store.set_fuel(self.fuel).map_err(|e| {
                 PhpException::from_class::<TerrariumException>(format!("fuel: {e:#}"))
             })?;
         }
-        if self.timeout_ms > 0 {
-            // Trap once the engine epoch advances one tick past now; the timer
-            // thread provides that tick after the wall-clock budget elapses.
-            store.set_epoch_deadline(1);
-        }
         Ok(())
     }
 
-    /// Run `f` under the wall-clock deadline: a timer thread bumps the engine
-    /// epoch once the budget elapses, tripping any in-flight guest execution.
-    fn guarded<R>(&self, f: impl FnOnce() -> R) -> R {
-        if self.timeout_ms == 0 {
-            return f();
-        }
-        let done = Arc::new(AtomicBool::new(false));
-        let timer = {
-            let engine = self.engine.clone();
-            let done = Arc::clone(&done);
-            let ms = self.timeout_ms;
-            thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_millis(ms);
-                while !done.load(Ordering::Relaxed) {
-                    if Instant::now() >= deadline {
-                        engine.increment_epoch();
-                    }
-                    thread::sleep(Duration::from_millis(1));
-                }
-            })
-        };
-        let r = f();
-        done.store(true, Ordering::Relaxed);
-        let _ = timer.join();
-        r
+    /// Timer ownership spans every exit, including setup errors and unwinding.
+    fn guarded<R>(
+        &self,
+        deadline: Option<Instant>,
+        f: impl FnOnce() -> PhpResult<R>,
+    ) -> PhpResult<R> {
+        check_deadline(deadline)?;
+        let _timer = deadline
+            .map(|deadline| EpochTimer::start(self.engine.clone(), deadline))
+            .transpose()
+            .map_err(|e| {
+                PhpException::from_class::<TerrariumException>(format!("timeout timer: {e}"))
+            })?;
+        let result = f()?;
+        // Host work cannot be preempted, but cannot return a late success either.
+        // An existing error from f takes precedence and is never masked here.
+        check_deadline(deadline)?;
+        Ok(result)
     }
+}
+
+fn arm_deadline(store: &mut Store<StoreState>, deadline: Option<Instant>) {
+    store.data_mut().deadline = deadline;
+    store.set_epoch_deadline(1);
+}
+
+fn check_deadline(deadline: Option<Instant>) -> PhpResult<()> {
+    if expired(deadline) {
+        return Err(map_err(Trap::Interrupt.into()));
+    }
+    Ok(())
 }
 
 /// Build a `Linker` providing the single `host_call` import. The closure must be
@@ -571,7 +626,13 @@ fn build_linker(engine: &Engine, state: &Rc<BridgeState>) -> PhpResult<Linker<St
 
                 // Re-enters PHP. An unknown capability or a thrown PHP exception
                 // becomes a trap here (caught + typed host-side).
+                if expired(caller.data().deadline) {
+                    return Err(Trap::Interrupt.into());
+                }
                 let result = state.host_call(&name, args).map_err(wasmtime::Error::msg)?;
+                if expired(caller.data().deadline) {
+                    return Err(Trap::Interrupt.into());
+                }
                 let out = result
                     .to_msgpack()
                     .map_err(|e| wasmtime::Error::msg(e.to_string()))?;

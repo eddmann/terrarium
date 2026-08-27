@@ -180,10 +180,14 @@ final class Terrarium
      * function suspended on a promise that never settles is invisible to the
      * engine's public API. `syncOnly: true` (TypeScript) rejects that at
      * compile time; see docs/errors.md.
+     *
+     * A positive timeoutMs overrides this call's budget, including guest setup.
+     * Null keeps the constructor default and its setup exemption; zero is
+     * unbounded; negative values are rejected. PHP callbacks cannot be preempted.
      */
-    public function eval(string $source): mixed
+    public function eval(string $source, ?int $timeoutMs = null): mixed
     {
-        return $this->rt->eval($source);
+        return $this->rt->eval($source, timeoutMs: $timeoutMs);
     }
 
     /**
@@ -208,10 +212,11 @@ final class Terrarium
      * `check()` would not mean "this will run".
      *
      * @return list<array{message: string, type?: string, line?: int}>
+     * @param ?int $timeoutMs Per-call timeout with the same semantics as eval().
      */
-    public function check(string $source): array
+    public function check(string $source, ?int $timeoutMs = null): array
     {
-        return $this->rt->check($source);
+        return $this->rt->check($source, timeoutMs: $timeoutMs);
     }
 
     /**
@@ -244,15 +249,16 @@ final class Terrarium
      * matched calls on one line share it.
      *
      * Nothing executes, exactly as with `check()`.
+     * The timeoutMs argument has the same per-call semantics as eval().
      *
      * @return array{
      *     diagnostics: list<array{message: string, type?: string, line?: int, ordinal?: int}>,
      *     schemas: list<array{ordinal: int, callee: string, line: int, schema: string}>
      * }
      */
-    public function analyze(string $source): array
+    public function analyze(string $source, ?int $timeoutMs = null): array
     {
-        return $this->rt->analyze($source);
+        return $this->rt->analyze($source, timeoutMs: $timeoutMs);
     }
 
     /**
@@ -312,6 +318,8 @@ final class Terrarium
      * Drop the persistent shared instance so the next `eval()` re-instantiates
      * the guest (re-warming engine state such as the TypeScript compiler). No-op
      * in isolated mode. Returns whether one existed.
+     * Callbacks, types, options, output and handles are retained; release any
+     * captured host context separately. Never reset from a shared callback.
      */
     public function reset(): bool
     {

@@ -22,8 +22,10 @@ non-zero values to contain resource abuse:
 
 - **`memoryLimit`** (bytes) — caps linear-memory growth; a `memory.grow` past it
   raises `Terrarium\MemoryException`.
-- **`timeoutMs`** — a wall-clock deadline (epoch interruption); an over-budget
-  run raises `Terrarium\TimeoutException`.
+- **`timeoutMs`** — the default wall-clock budget for each operation (epoch
+  interruption). Omitted/null operation arguments retain the historical setup
+  exemption; an explicit positive override also covers guest initialization.
+  See [per-call timeouts](#per-call-timeouts).
 - **`maxStack`** (bytes) — the native call-stack cap.
 - **`fuel`** — deterministic instruction metering (an alternative to `timeoutMs`
   for reproducible runs); exhaustion raises `Terrarium\TimeoutException`.
@@ -34,7 +36,7 @@ non-zero values to contain resource abuse:
   generator syntax at compile time** (see below).
 - **`typeArgumentSchemas`** — a list of callee names (`['ctx.model',
   'ctx.agent']`) whose **single type argument** a compiling guest should derive
-  a JSON Schema from, returned by [`analyze()`](#analyzestring-source-array).
+  a JSON Schema from, returned by [`analyze()`](#analyzestring-source-int-timeoutms--null-array).
 
 #### Synchronous-only guests
 
@@ -163,7 +165,69 @@ $t->register('user.fetch',
     fn (int $id): array => ['name' => 'Ada', 'roles' => ['admin', 'dev']]);
 ```
 
-### `eval(string $source): mixed`
+### Per-call timeouts
+
+Both the PHP facade and the native `Terrarium\Runtime` accept an optional
+`?int $timeoutMs = null` on `eval`, `check`, and `analyze`:
+
+```php
+$rt = new \Terrarium\Runtime($wasmBytes, isolated: false);
+$diagnostics = $rt->check($source, timeoutMs: 5000);
+// Recompute the enclosing operation's remaining budget before the next call.
+if ($diagnostics === []) {
+    $result = $rt->eval($source, timeoutMs: 3000);
+}
+```
+
+| Argument | Meaning |
+|---|---|
+| Omitted or `null` | Use the constructor default; guest setup remains outside that budget. |
+| Positive integer | Use this call's budget, including guest setup. Does not change the default. |
+| `0` | No wall-clock timeout for this call; memory/fuel limits still apply. |
+| Negative integer | Throw `Terrarium\Exception` before running or clearing output. |
+
+A positive timeout outside the supported monotonic clock range also throws
+`Terrarium\Exception`. The native Runtime rejects non-integer, non-null timeout
+values rather than treating failed conversions as an omitted argument. The PHP
+facade applies PHP's normal `?int` argument rules before forwarding the value.
+Existing constructor normalization is unchanged: omitted,
+null, zero and negative constructor timeouts mean unbounded.
+
+**Compatibility:** passing the constructor's number explicitly changes the
+scope. `new Runtime($bytes, timeoutMs: 1000)` followed by `eval($source)` starts
+its timer after instantiation and `_initialize`; `eval($source, timeoutMs: 1000)`
+includes both in the same budget. This also applies after reset or fault
+recovery, and to each fresh instance in isolated mode. An initially unbounded
+Runtime fully supports a later timed call.
+
+An explicit positive deadline starts at native method entry, after argument
+validation, before source encoding. It includes Wasm start code, `_initialize`,
+guest allocation, compilation/checking, execution and the ABI result read/decode.
+Initialization does not restart the clock. Constructor work (loading/compiling
+the Wasm module, Engine and InstancePre creation), PHP argument conversion,
+final PHP result conversion and timer teardown are outside this scope. Fuel
+keeps its existing setup exemption and is refilled before each entrypoint.
+
+This is **not an end-to-end hard deadline**. Epochs interrupt running Wasm;
+host allocation, compilation of the Wasm module and synchronous PHP callbacks
+cannot be preempted. Time spent in a callback consumes the active budget; when
+control returns, expiry raises `Terrarium\TimeoutException` before continuing
+guest execution. Successful ABI completion is also checked against the deadline.
+The host must cap HTTP/connect/retry waits against its remaining budget and
+recheck it before starting more work. Completed side effects are not rolled back.
+Refuse an exhausted remaining budget yourself: **do not pass zero**, which means
+unbounded.
+
+Each call owns a cancellable timer that is joined before return, and Store
+deadlines are rearmed per call. Nested isolated calls share an Engine but check
+their own deadlines, so one timer cannot prematurely expire another Store. An
+unbounded or longer child can still delay an expired parent while the parent is
+blocked in PHP. Recursive calls on a shared Runtime remain unsupported.
+
+Upgrade the native extension and PHP facade together. The guest ABI and bundled
+WASM fixtures do not change for this API addition.
+
+### `eval(string $source, ?int $timeoutMs = null): mixed`
 
 Run guest source and marshal the result back to PHP. A guest-program error (a
 thrown JS exception, a Python traceback, a failed TypeScript type-check) raises
@@ -171,7 +235,7 @@ a `Terrarium\GuestException` whose message reads `Type: message (line N)`, locat
 at the original source line (see [errors](errors.md)). Anything the guest printed
 is captured separately — read it with [`output()`](#output-string).
 
-### `check(string $source): array`
+### `check(string $source, ?int $timeoutMs = null): array`
 
 Statically validate guest source **without running it**. Returns every
 diagnostic as `{message, type?, line?}`; an empty array means it passed. Nothing
@@ -188,7 +252,7 @@ $t->check('const u = user.fetch("42"); const n: number = u.name;');
 //  ['message' => "Type 'string' is not assignable to type 'number'.",  'type' => 'TS2322', 'line' => 1]]
 ```
 
-### `analyze(string $source): array`
+### `analyze(string $source, ?int $timeoutMs = null): array`
 
 The same static pass as `check()`, with everything the guest was additionally
 asked to extract:
@@ -353,6 +417,12 @@ Drop the persistent shared instance, so the next `eval()` re-instantiates the
 guest (and re-warms any engine-internal state, e.g. the TypeScript compiler
 context). A no-op in isolated mode (every call is already fresh). Returns whether
 an instance existed.
+
+Reset retains Engine/InstancePre, registered callbacks, declarations, compile
+options, captured output and granted handles. It is not a host-context wipe.
+Replace fixed callbacks to release captured context, replace declarations/options,
+and explicitly revoke handles before reusing a Runtime for another session.
+Never call reset from inside a callback on the same shared Runtime.
 
 > Note: the bundled guests run each `eval` in a fresh runtime, so guest *program*
 > globals don't accumulate across evals regardless — see

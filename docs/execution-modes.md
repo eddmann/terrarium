@@ -64,6 +64,26 @@ persistence:
 `reset()` drops the shared instance, so the next `eval()` re-instantiates (and,
 for the TS guest, re-warms the compiler).
 
+`check()` and `analyze()` use the same shared instance too. Each operation can
+receive its own [timeout override](api.md#per-call-timeouts), so shrinking an
+enclosing deadline does not require rebuilding the Runtime. An explicit positive
+timeout covers initialization; omitted/null preserves the constructor default's
+historical setup exemption.
+
+Reset retains Engine/InstancePre and all host state: callbacks, declarations,
+compile options, output and granted handles. Registering an existing name
+replaces its callable, but removing a declaration does not revoke that callable.
+For session reuse, refresh fixed callback slots and declarations/options before
+execution; reset and release captured host context at the session boundary, and
+revoke any handles. Check/analyze do not clear previous output, so do not attribute
+an earlier eval's output to a subsequent validation failure.
+
+Fresh user globals do not mean fresh linear memory. Compiler state and old
+allocations remain within the shared instance until reset; bound session size
+and retain isolated mode when per-call fresh memory is required. Runtime use is
+sequential and process-local (PHP NTS). Recursive shared calls are rejected, and
+reset must not be called from inside a shared callback.
+
 ## Isolated mode — a fresh instance per eval
 
 A brand-new wasm instance per `eval()`, discarded afterward — a guaranteed-fresh

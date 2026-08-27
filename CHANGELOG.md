@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Added optional per-call `timeoutMs` to `eval()`, `check()` and `analyze()` on the native Runtime and PHP facade, including guest initialization for explicit positive timeouts. Omitted/null retains the constructor default's setup exemption; zero overrides are unbounded and negative overrides are rejected.
+
+### Fixed
+
+- Enabled timed operations on runtimes originally constructed without a timeout, without rebuilding their compiled module.
+- Scoped timers to individual operations with cancellation and joining, and checked each Store's own deadline during nested isolated calls.
+
 ## [1.1.0] - 2026-08-21
 
 ### Added
@@ -27,4 +38,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Detected registered promise reactions that would otherwise allow a partial guest run to report success.
 - Cleared two RustSec advisories through the Wasmtime upgrade.
 
+[Unreleased]: https://github.com/eddmann/terrarium/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/eddmann/terrarium/compare/v1.0.0...v1.1.0
