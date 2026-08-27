@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.2.0] - 2026-08-27
 
 ### Added
 
@@ -38,5 +38,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Detected registered promise reactions that would otherwise allow a partial guest run to report success.
 - Cleared two RustSec advisories through the Wasmtime upgrade.
 
-[Unreleased]: https://github.com/eddmann/terrarium/compare/v1.1.0...HEAD
+[1.2.0]: https://github.com/eddmann/terrarium/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/eddmann/terrarium/compare/v1.0.0...v1.1.0
