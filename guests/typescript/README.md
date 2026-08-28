@@ -79,7 +79,10 @@ proxies commonly 403 the codeload redirect while allowing git over HTTPS.
 
 - A persistent **compiler** context (tsc + the non-DOM `lib.es2024` chain + the
   driver in `driver.js`) — created once per instance; lib parses and `Program`
-  state amortize across evals.
+  state amortize across evals. The last `Program` and its checker are reused
+  when the source and SDK declaration text match exactly, including a shared
+  `check()` followed by `eval()`. Constraints and schema extraction still use
+  each call's current options; changed text rebuilds the `Program`.
 - A fresh **user** context per eval — identical to the plain QuickJS guest.
 
 Each eval fetches the SDK `.d.ts` (reserved `$dts` capability) and type-checks the

@@ -116,18 +116,33 @@ check('well-typed source -> no diagnostics', function () use ($wasm) {
 check('ALL errors are returned, with types and lines', function () use ($wasm) {
     $ts = new Terrarium($wasm);
     $ts->register('user.fetch', /** @return array{name: string} */ fn (int $id): array => []);
-    $diags = $ts->check("const u = user.fetch(\"42\");\nconst x: number = u.name;\n");
+    $source = "const u = user.fetch(\"42\");\nconst x: number = u.name;\n";
+    $diags = $ts->check($source);
     eq(2, count($diags));
     eq('TS2345', $diags[0]['type']);
     eq(1, $diags[0]['line']);
     eq('TS2322', $diags[1]['type']);
     eq(2, $diags[1]['line']);
+    eq($diags, $ts->check($source));
+    eq($diags, $ts->analyze($source)['diagnostics']);
+    try {
+        $ts->eval($source);
+        throw new RuntimeException('expected a type-check rejection');
+    } catch (GuestException $e) {
+        contains($e->getMessage(), 'TS2345');
+        contains($e->getMessage(), '(line 1)');
+        contains($e->getMessage(), '[+1 more error]');
+    }
 });
 check('check() ignores @ts-nocheck (an explicit check asks for diagnostics)', function () use ($wasm) {
     $ts = new Terrarium($wasm);
-    $diags = $ts->check("// @ts-nocheck\nconst n: string = 1;\n");
+    $source = "// @ts-nocheck\nconst n: string = 1; n;\n";
+    $diags = $ts->check($source);
     eq(1, count($diags));
     eq('TS2322', $diags[0]['type']);
+    eq(2, $diags[0]['line']);
+    eq(1, $ts->eval($source));
+    eq($diags, $ts->check($source));
 });
 check('nothing executes and output() is untouched', function () use ($wasm) {
     $ts = new Terrarium($wasm);
@@ -292,6 +307,7 @@ check('the raw engine takes it as an open option map (setCompileOptions)', funct
     eq([], $rt->check('async function f() { return 1; }'));
     $rt->setCompileOptions(['sync_only' => true, 'not_an_option_here' => 'ignored']);
     eq(1, count($rt->check('async function f() { return 1; }')));
+    throws(GuestException::class, fn () => $rt->eval('async function f() { return 1; }'));
     $rt->setCompileOptions([]);          // cleared again
     eq([], $rt->check('async function f() { return 1; }'));
 });
@@ -501,6 +517,43 @@ check('values marshal both ways through the SDK', function () use ($wasm) {
 });
 
 echo "\nwarm reuse with per-call timeouts\n";
+check('the same checked source executes afresh with current callbacks and output', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $rt->register('value', static fn (): int => 7);
+    $rt->setTypes('declare function value(): number;');
+    $source = <<<'TS'
+        const state = globalThis as typeof globalThis & { count?: number };
+        state.count = (state.count || 0) + 1;
+        console.log(value());
+        state.count;
+        TS;
+    eq([], $rt->check($source));
+    eq('', $rt->output());
+    eq(1, $rt->eval($source));
+    eq('7', $rt->output());
+    $rt->register('value', static fn (): int => 9);
+    eq([], $rt->check($source));
+    eq('7', $rt->output());
+    eq(1, $rt->eval($source));
+    eq('9', $rt->output());
+});
+
+check('changing source or SDK invalidates the checked program', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $called = false;
+    $rt->register('value', static function () use (&$called): int { $called = true; return 7; });
+    $rt->setTypes('declare function value(): number;');
+    $source = 'const n: number = value(); n;';
+    eq([], $rt->check($source));
+    $rt->setTypes('declare function value(): string;');
+    throws(GuestException::class, fn () => $rt->eval($source));
+    eq(false, $called);
+    $rt->setTypes('declare function value(): number;');
+    eq(7, $rt->eval($source));
+    eq('TS2322', $rt->check('const n: string = value(); n;')[0]['type']);
+    eq([], $rt->check($source));
+});
+
 check('complete check then eval reuse one TypeScript Runtime with shrinking budgets', function () use ($wasm) {
     $rt = new \Terrarium\Runtime(file_get_contents($wasm));
     $rt->setCompileOptions(['sync_only' => true]);

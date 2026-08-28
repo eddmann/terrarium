@@ -29,8 +29,9 @@
  *    numbers stay exact. Non-erasable syntax (enum, namespace, ...) is a clear
  *    error rather than silent breakage.
  *
- * Lib SourceFiles are cached for the context's life; the previous Program is
- * reused when the SDK is unchanged, so repeat evals only re-parse the source.
+ * Lib SourceFiles are cached for the context's life. Identical source and SDK
+ * text reuse the last Program and its checker state; per-call constraints and
+ * schema extraction still run against the current options.
  */
 (function () {
     "use strict";
@@ -38,7 +39,21 @@
     var LIB_DIR = "/libs/";
     var libCache = Object.create(null); // lib filename -> SourceFile
     var lastProgram;
+    var lastSource;
     var lastDts;
+
+    // A thrown compiler failure can leave a partially evaluated checker. Do
+    // not reuse it on the next call; ordinary returned diagnostics are safe.
+    function discardProgramOnFailure(entrypoint) {
+        return function (source, sdkDts, options) {
+            try {
+                return entrypoint(source, sdkDts, options);
+            } catch (e) {
+                lastProgram = lastSource = lastDts = undefined;
+                throw e;
+            }
+        };
+    }
 
     // The compiler pin. The engine is quickjs-ng v0.16.2, which implements every
     // ES2021-ES2024 library addition this sandbox can reach; the audit behind
@@ -105,9 +120,14 @@
     // diagnostics pass and by the type-argument schema extraction below, which
     // needs the same Program's TypeChecker.
     function buildProgram(source, sdkDts) {
+        sdkDts = sdkDts || "";
+        if (lastProgram && source === lastSource && sdkDts === lastDts) {
+            return lastProgram;
+        }
+
         var files = Object.create(null);
         files["/main.ts"] = source;
-        files["/sdk.d.ts"] = RUNTIME_DTS + (sdkDts || "");
+        files["/sdk.d.ts"] = RUNTIME_DTS + sdkDts;
 
         var options = {
             target: TARGET,
@@ -150,6 +170,7 @@
             sdkDts === lastDts ? lastProgram : undefined
         );
         lastProgram = program;
+        lastSource = source;
         lastDts = sdkDts;
         return program;
     }
@@ -1107,19 +1128,19 @@
     // Check-only entrypoint: the diagnostics array, unchanged since the first
     // release. Schemas are the analyze entrypoint's business -- a host that
     // knows nothing of them still gets exactly the shape it always got.
-    globalThis.__terrariumCheck = function (source, sdkDts, options) {
+    globalThis.__terrariumCheck = discardProgramOnFailure(function (source, sdkDts, options) {
         return analyzeSource(source, sdkDts, options).diagnostics;
-    };
+    });
 
     // Analyze entrypoint: the same diagnostics plus the extracted type-argument
     // schemas, as {diagnostics, schemas}. With no `type_argument_schemas`
     // option it is `check()` with an empty schema list.
-    globalThis.__terrariumAnalyze = function (source, sdkDts, options) {
+    globalThis.__terrariumAnalyze = discardProgramOnFailure(function (source, sdkDts, options) {
         var out = analyzeSource(source, sdkDts, options);
         return { diagnostics: out.diagnostics, schemas: out.schemas };
-    };
+    });
 
-    globalThis.__terrariumCompile = function (source, sdkDts, options) {
+    globalThis.__terrariumCompile = discardProgramOnFailure(function (source, sdkDts, options) {
         // TypeScript's own opt-out pragma, honoured only in leading comments.
         var noCheck = false;
         var ranges = ts.getLeadingCommentRanges(source, 0) || [];
@@ -1172,5 +1193,5 @@
             };
         }
         return { js: js };
-    };
+    });
 })();
