@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.1] - 2026-08-28
+
+### Changed
+
+- Reused the last TypeScript Program and checker for identical source and SDK declarations, reducing repeated compilation during shared `check()` followed by `eval()` while preserving complete diagnostics and current per-call options (#4).
+
 ## [1.2.0] - 2026-08-27
 
 ### Added
@@ -38,5 +44,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Detected registered promise reactions that would otherwise allow a partial guest run to report success.
 - Cleared two RustSec advisories through the Wasmtime upgrade.
 
+[1.2.1]: https://github.com/eddmann/terrarium/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/eddmann/terrarium/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/eddmann/terrarium/compare/v1.0.0...v1.1.0
