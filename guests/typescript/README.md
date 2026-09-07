@@ -82,7 +82,11 @@ proxies commonly 403 the codeload redirect while allowing git over HTTPS.
   state amortize across evals. The last `Program` and its checker are reused
   when the source and SDK declaration text match exactly, including a shared
   `check()` followed by `eval()`. Constraints and schema extraction still use
-  each call's current options; changed text rebuilds the `Program`.
+  each call's current options; changed text rebuilds the `Program`. A *new*
+  source against unchanged declarations reuses the parsed SDK `.d.ts` too —
+  `createProgram` only carries a file over when the host hands back the same
+  `SourceFile`, so without that the whole SDK was re-parsed and re-bound per
+  check, at a cost linear in its size.
 - A fresh **user** context per eval — identical to the plain QuickJS guest.
 
 Each eval fetches the SDK `.d.ts` (reserved `$dts` capability) and type-checks the

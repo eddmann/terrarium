@@ -15,7 +15,7 @@ subclasses. Import what you use (`use Terrarium\Terrarium;`) or reference the
 fully-qualified names. Install via `composer require eddmann/terrarium` (which
 declares the `ext-terrarium` requirement) or require `lib/Terrarium.php` directly.
 
-### `new Terrarium(string $path, ?int $memoryLimit = null, ?int $timeoutMs = null, ?int $maxStack = null, ?int $fuel = null, bool $isolated = false, bool $syncOnly = false, ?array $typeArgumentSchemas = null)`
+### `new Terrarium(string $path, ?int $memoryLimit = null, ?int $timeoutMs = null, ?int $maxStack = null, ?int $fuel = null, bool $isolated = false, bool $syncOnly = false, ?array $typeArgumentSchemas = null, bool $precompiled = false)`
 
 Load a guest engine from a `.wasm` file. Limits default to unbounded; pass
 non-zero values to contain resource abuse:
@@ -37,6 +37,75 @@ non-zero values to contain resource abuse:
 - **`typeArgumentSchemas`** — a list of callee names (`['ctx.model',
   'ctx.agent']`) whose **single type argument** a compiling guest should derive
   a JSON Schema from, returned by [`analyze()`](#analyzestring-source-int-timeoutms--null-array).
+- **`precompiled`** — `true` says `$path` is an artifact from
+  [`Terrarium::precompile()`](#static-precompilestring-path-int-maxstack--null-int-fuel--null-bool-portable--true-string),
+  loaded without compiling. **An artifact is native code and is trusted exactly
+  as the extension binary is** — read that section before using it.
+
+### `static precompile(string $path, ?int $maxStack = null, ?int $fuel = null, bool $portable = true): string`
+
+Compile a guest `.wasm` ahead of time and return the **artifact** bytes; load
+them later with `precompiled: true`. Constructing a heavy guest costs one to two
+seconds of Cranelift compilation the first time a process does it, and a
+short-lived process (an AWS Lambda invocation, where the on-disk
+`wasmtime::Cache` under `$HOME` is unusable) pays that on every cold start. Run
+this in your build pipeline instead, ship the artifact, and the deployed process
+only deserializes — see [precompiling for
+deployment](install.md#precompiling-for-deployment).
+
+```php
+// build pipeline, with the extension build you will deploy:
+file_put_contents('quickjs_guest.cwasm', Terrarium::precompile('quickjs_guest.wasm'));
+
+// deployed:
+$t = new Terrarium('quickjs_guest.cwasm', precompiled: true);
+```
+
+> **An artifact is native machine code, and loading one is a trust decision.**
+> Wasmtime does **not** validate it: the bytes are executed with the host's full
+> authority, outside the WASM sandbox. Treat an artifact exactly as you treat
+> `libterrarium.so` — produce it in your own build pipeline, ship it beside the
+> extension, and **never** load one that came from user input, an upload, or any
+> other untrusted source. This is why loading is opt-in per construction and is
+> never inferred from the bytes.
+
+**`$portable`** (default `true`) compiles for the baseline CPU of this machine's
+architecture rather than for the CPU features Wasmtime detects on the machine
+running `precompile()`. An artifact records the features it was compiled to
+use, and loading refuses one that needs a feature the host lacks, so an
+artifact built on a CI runner with AVX-512 would otherwise be refused by a
+plainer Lambda host. The baseline costs the bundled guests nothing measurable
+(they are scalar interpreters: the TypeScript guest checks and runs at the same
+speed from either artifact). Pass `false` only when the machine that precompiles is
+the machine that runs. The `terrarium` release ships portable artifacts for the
+Lambda builds — see [install](install.md#aws-lambda-bref).
+
+The artifact is tied to the **exact extension build** that produced it —
+Wasmtime version, target, and configuration — so generate it with the same
+binary that will load it. Anything else is refused with a
+`Terrarium\Exception` naming the mismatch (Wasmtime detects this reliably, but
+it is a build-pipeline invariant, not a run-time feature).
+
+Pass the same `maxStack` and `fuel` you will construct with. Only the *presence*
+of fuel metering is compiled in, and it must match on both ends:
+
+| Constructor option | In the artifact? | Mismatch on load |
+|---|---|---|
+| `fuel` (enabled / not) | yes — metering is instrumented into the code | refused: *"Module was compiled with fuel support but it is not enabled for the host"* (and the converse) |
+| `fuel` (the budget) | no — spent per call | fine: any positive budget loads |
+| `maxStack` | no — a run-time engine setting | fine: the **loading** Runtime's bound applies |
+| `memoryLimit`, `timeoutMs`, `isolated` | no — per Store / per call | fine |
+
+Loading also goes through the same process-wide compiled-guest cache as wasm
+(see [execution modes](execution-modes.md)), keyed on the artifact bytes and
+their loader, so a second Runtime over one artifact costs an instantiation.
+
+The engine primitive underneath takes **bytes** rather than paths, on both ends:
+
+```php
+$artifact = Terrarium\Runtime::precompile($wasmBytes, fuel: 1);
+$rt       = new Terrarium\Runtime($artifact, precompiled: true, fuel: 5_000_000);
+```
 
 #### Synchronous-only guests
 
@@ -219,8 +288,9 @@ Refuse an exhausted remaining budget yourself: **do not pass zero**, which means
 unbounded.
 
 Each call owns a cancellable timer that is joined before return, and Store
-deadlines are rearmed per call. Nested isolated calls share an Engine but check
-their own deadlines, so one timer cannot prematurely expire another Store. An
+deadlines are rearmed per call. Nested isolated calls share an Engine — as do
+separate Runtimes over the same guest — but every Store checks its own deadline,
+so one timer cannot prematurely expire another Store. An
 unbounded or longer child can still delay an expired parent while the parent is
 blocked in PHP. Recursive calls on a shared Runtime remain unsupported.
 

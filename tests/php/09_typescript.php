@@ -554,6 +554,181 @@ check('changing source or SDK invalidates the checked program', function () use 
     eq([], $rt->check($source));
 });
 
+// The parsed SDK declarations are cached inside the compiler context so that a
+// new source does not re-read them (the cost was linear in the .d.ts). Nothing
+// below is a timing assertion: the contract is that the cache is invisible —
+// every check sees exactly the declarations registered at the time it runs, and
+// never anything from another check's source.
+echo "\nthe parsed SDK declarations are reused, never observed stale\n";
+check('distinct sources check independently against one large SDK', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $dts = '';
+    for ($i = 0; $i < 200; $i++) {
+        $dts .= sprintf(
+            "interface Rec%1\$d { id: string; count: number; tags?: string[] }\n"
+            . "declare function op%1\$d(input: Rec%1\$d, limit?: number): Rec%1\$d[];\n",
+            $i
+        );
+    }
+    eq(true, strlen($dts) > 20000);
+    $rt->setTypes($dts);
+    for ($i = 0; $i < 20; $i++) {
+        eq([], $rt->check(sprintf('const r%1$d: Rec%1$d[] = op%1$d({ id: "a", count: %1$d }); r%1$d;', $i)));
+        $bad = $rt->check(sprintf('const r%1$d: number = op%1$d({ id: "a", count: %1$d }); r%1$d;', $i));
+        eq(1, count($bad));
+        eq('TS2322', $bad[0]['type']);
+        eq(1, $bad[0]['line']);
+    }
+    // A declaration the SDK never had is still unknown, however many checks ran.
+    eq('TS2552', $rt->check('op999({ id: "a", count: 1 });')[0]['type']);
+    // ... and one source's declarations never reach the next.
+    eq([], $rt->check('const leaked: Rec0 = { id: "a", count: 1 }; leaked;'));
+    eq('TS2304', $rt->check('const n: number = leaked.count; n;')[0]['type']);
+});
+
+check('replacing the SDK between checks is seen at once', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $rt->setTypes('declare function op(input: string): string[];');
+    $source = 'const r: string[] = op("a"); r;';
+    eq([], $rt->check($source));
+    // The declaration is gone: a call that checked clean must stop checking.
+    $rt->setTypes('declare const other: number;');
+    eq('TS2304', $rt->check($source)[0]['type']);
+    // ... and the replacement is live in the same breath.
+    eq([], $rt->check('const n: number = other; n;'));
+    // Restored, then narrowed in place -- same name, different type.
+    $rt->setTypes('declare function op(input: string): string[];');
+    eq([], $rt->check($source));
+    eq('TS2304', $rt->check('const n: number = other; n;')[0]['type']);
+    $rt->setTypes('declare function op(input: string): number[];');
+    eq('TS2322', $rt->check($source)[0]['type']);
+    eq([], $rt->check('const r: number[] = op("a"); r;'));
+});
+
+check('a malformed declaration is reported against /sdk.d.ts', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $rt->setTypes('declare function broken(: string;');
+    $diags = $rt->check('const n: number = 1; n;');
+    eq(true, count($diags) > 0);
+    contains($diags[0]['message'], '(in /sdk.d.ts)');
+    eq(false, isset($diags[0]['line']));   // not a line in the submitted source
+    eq($diags, $rt->check('const s: string = "x"; s;'));
+    // Repairing it clears the diagnostic without a new Runtime.
+    $rt->setTypes('declare function broken(input: string): void;');
+    eq([], $rt->check('const n: number = 1; n;'));
+    eq([], $rt->check('broken("x");'));
+});
+
+check('a stack-exhausting source traps the guest without poisoning the next check', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $rt->setTypes('declare function op(input: string): string[];');
+    $source = 'const r: string[] = op("a"); r;';
+    eq([], $rt->check($source));
+    // Nesting deep enough to exhaust the *wasm* stack while the compiler
+    // recurses over it. Which failure this is, is measured rather than assumed:
+    // it is a sandbox-level trap, so the driver's own JS catch (the one that
+    // drops its cached program and parsed SDK file) never runs -- the guest
+    // never regains control. Recovery is the host's instead: a trap discards
+    // the Store, and the whole guest goes with it -- caches, parsed SDK file,
+    // warm checker -- so the next check starts from a fresh instance. Pinning
+    // the concrete class is the point; the base class would accept either path
+    // and so prove neither.
+    $deep = 'const x = ' . str_repeat('(', 20000) . '1' . str_repeat(')', 20000) . '; x;';
+    try {
+        $rt->check($deep);
+        throw new RuntimeException('expected the nesting to be refused');
+    } catch (TrapException $e) {
+        contains($e->getMessage(), 'call stack exhausted');
+    }
+    eq([], $rt->check($source));
+    eq('TS2322', $rt->check('const r: number = op("a"); r;')[0]['type']);
+    $rt->setTypes('declare const other: number;');
+    eq('TS2304', $rt->check($source)[0]['type']);
+    eq([], $rt->check('const n: number = other; n;'));
+});
+
+check('a source cannot merge declarations into the cached SDK file', function () use ($wasm) {
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $rt->setTypes('interface Rec0 { id: string }');
+    // Declaration merging is TypeScript's rule and must hold for the source
+    // that wrote it: inside this Program, Rec0 has both members.
+    eq([], $rt->check('interface Rec0 { extra: string } const r: Rec0 = { id: "a", extra: "b" }; r;'));
+    // ... and only inside it. The next check is handed the *same* cached
+    // /sdk.d.ts SourceFile, so a merge that had mutated it would leave `extra`
+    // declared for a source that never declared it.
+    $leaked = $rt->check('const s: string = ({} as Rec0).extra; s;');
+    eq(1, count($leaked));
+    eq('TS2339', $leaked[0]['type']);
+    contains($leaked[0]['message'], "Property 'extra' does not exist");
+    eq('TS2339', $rt->check('const t: string = ({} as Rec0).extra; t;')[0]['type']);
+    eq([], $rt->check('const u: string = ({} as Rec0).id; u;'));   // the SDK's own member survives
+
+    // The same for a namespace, whose members merge into an existing one.
+    $rt->setTypes('declare namespace Cfg { const a: string }');
+    eq([], $rt->check('declare namespace Cfg { const b: string } const s: string = Cfg.b; s;'));
+    $leaked = $rt->check('const s: string = Cfg.b; s;');
+    eq(1, count($leaked));
+    eq('TS2339', $leaked[0]['type']);
+    eq([], $rt->check('const s: string = Cfg.a; s;'));
+});
+
+check('a large SDK costs no more per check than an empty one', function () use ($wasm) {
+    // The one deliberate timing assertion in this suite, and it earns its place:
+    // defeating the SDK SourceFile cache -- as comparing the per-program options
+    // object by identity once did, since `createProgram` then declines to reuse
+    // the old program -- changes no result anywhere, only the cost. Every
+    // functional check above passes either way; only a measurement sees it.
+    // Both medians come from this one process and this one Runtime, and the
+    // bound is wide: ~1.2x with the cache in place, ~65x without it.
+    $rt = new \Terrarium\Runtime(file_get_contents($wasm));
+    $seq = 0;
+    $medianCheckMs = function (int $samples) use ($rt, &$seq): float {
+        $times = [];
+        for ($i = 0; $i < $samples; $i++) {
+            // Distinct every time, so the driver's identical-source shortcut
+            // never answers instead of the compiler.
+            $source = sprintf('const v%1$d: number = %1$d; v%1$d;', $seq++);
+            $t = -hrtime(true);
+            eq([], $rt->check($source));
+            $times[] = ($t + hrtime(true)) / 1e6;
+        }
+        sort($times);
+        return $times[intdiv(count($times), 2)];
+    };
+
+    $rt->setTypes('');
+    $medianCheckMs(2);            // warm the compiler, the libs and the empty SDK
+    $empty = $medianCheckMs(5);
+
+    $dts = '';
+    for ($i = 0; $i < 1000; $i++) {
+        $dts .= sprintf(
+            "interface Big%1\$d { id: string; count: number; tags?: string[] }\n"
+            . "declare function big%1\$d(input: Big%1\$d, limit?: number): Big%1\$d[];\n",
+            $i
+        );
+    }
+    eq(true, strlen($dts) > 120000);
+    $rt->setTypes($dts);
+    $medianCheckMs(1);            // the one check that legitimately parses it
+    $large = $medianCheckMs(5);
+
+    printf(
+        "  median check: empty SDK %.1f ms, %d KB SDK %.1f ms (%.1fx)\n",
+        $empty,
+        intdiv(strlen($dts), 1024),
+        $large,
+        $large / $empty
+    );
+    if ($large > 10 * $empty) {
+        throw new RuntimeException(sprintf(
+            'the SDK looks re-parsed per check: %.1f ms against %.1f ms for an empty SDK',
+            $large,
+            $empty
+        ));
+    }
+});
+
 check('complete check then eval reuse one TypeScript Runtime with shrinking budgets', function () use ($wasm) {
     $rt = new \Terrarium\Runtime(file_get_contents($wasm));
     $rt->setCompileOptions(['sync_only' => true]);

@@ -21,6 +21,7 @@ Per PHP 8.4 / 8.5, NTS:
 | `terrarium-vX-php8.4-linux-x86_64.so` / `-aarch64.so` | self-hosted Linux / Docker (glibc ≥ 2.35) |
 | `terrarium-vX-php8.4-lambda-bref-x86_64.zip` / `-arm64.zip` | AWS Lambda via [Bref](https://bref.sh) (a ready Lambda layer) |
 | `terrarium-vX-php8.4-lambda-bref-*.so` | Lambda / Amazon Linux 2023, if you prefer the raw `.so` (glibc ≥ 2.34) |
+| `terrarium-vX-php8.4-lambda-bref-*-precompiled-guests.zip` | the TypeScript guest precompiled for that exact Lambda `.so`, without fuel metering (see [Precompiling for deployment](#precompiling-for-deployment)) |
 | `terrarium-vX-php8.4-macos-arm64.dylib` | local development on macOS (Apple Silicon) |
 | `terrarium-vX-php-lib.zip` | the PHP library (`lib/`) — required, platform-independent |
 | `terrarium-vX-guests.zip` | the guest engines (`*_guest.wasm`) — pick your language |
@@ -102,8 +103,93 @@ aws lambda publish-layer-version \
   --zip-file fileb://terrarium-vX-php8.4-lambda-bref-arm64.zip
 ```
 
-Ship the PHP library and the guest `.wasm` you need alongside your code in
-`/var/task`.
+Ship the PHP library alongside your code in `/var/task`. On Lambda the module
+cache cannot survive a cold start, so do not ship the guest `.wasm`: ship its
+**precompiled artifact** instead and construct with `precompiled: true`. Every
+Lambda build in a release comes with the TypeScript guest (the heavy one)
+already precompiled for that exact `.so`, as
+`terrarium-vX-phpY-lambda-bref-ARCH-precompiled-guests.zip`, compiled without
+fuel metering. Take the zip that matches the layer or `.so` you deploy, unpack
+`typescript_guest.cwasm` into `/var/task`, and check it against the
+`SHA256SUMS` inside:
+
+```php
+$ts = new Terrarium\Terrarium(__DIR__ . '/typescript_guest.cwasm', precompiled: true);
+```
+
+Any other guest, a Runtime constructed with `fuel:` (fuel metering is compiled
+in, so it needs its own artifact), or any other build of the extension, you
+precompile yourself — see [precompiling for deployment](#precompiling-for-deployment).
+
+## Precompiling for deployment
+
+Constructing a guest compiles its wasm with Cranelift: one to two seconds for a
+heavy guest, paid by the **first construction in each process**. Wasmtime's
+on-disk module cache normally absorbs that, but a deployment with no writable
+(or no persistent) cache directory — an AWS Lambda function, where `$HOME` is
+read-only and each cold start is a fresh filesystem — pays it on every cold
+start.
+
+`Terrarium::precompile()` moves that work into your build pipeline. It returns
+the compiled artifact; the deployed process loads it with `precompiled: true`
+and only deserializes, which also removes the dependency on a writable cache
+directory entirely.
+
+```sh
+# build step — run with the SAME extension build you are deploying
+php -d extension=./terrarium.so -r '
+    require "vendor/autoload.php";
+    file_put_contents("guest.cwasm", Terrarium\Terrarium::precompile("typescript_guest.wasm"));
+'
+```
+
+`tools/precompile-guests.php` does the same for a whole set of guests and
+writes a `SHA256SUMS` beside them — it is what the release workflow runs:
+
+```sh
+php -d extension=./terrarium.so tools/precompile-guests.php out/ tests/wasm/*.wasm
+php -d extension=./terrarium.so tools/precompile-guests.php --fuel out-fuel/ tests/wasm/*.wasm
+```
+
+```php
+// deployed (e.g. in /var/task alongside the .so)
+$t = new Terrarium\Terrarium(__DIR__ . '/guest.cwasm', precompiled: true);
+```
+
+Measured on the TypeScript guest (release build, 4 CPUs), the first
+construction in a fresh process: **~1.6 s** from wasm with an empty module
+cache, **~0.33 s** from wasm with a warm module cache, and **~0.11 s** from its
+artifact, which needs no cache at all.
+
+Three rules:
+
+- **Generate it with the extension build that will load it.** An artifact is
+  bound to that exact Wasmtime version, target and configuration; anything else
+  is refused with a `Terrarium\Exception`. Regenerate it whenever you upgrade
+  the extension — treat it as a build output, not a checked-in file.
+- **Pass the same `fuel` setting on both ends.** Fuel metering is compiled in,
+  so an artifact built with `fuel:` set loads only into a Runtime with `fuel:`
+  set, and vice versa. The budget itself, `maxStack`, `memoryLimit` and
+  `timeoutMs` are free to differ.
+- **Precompile for the architecture, not the build machine.** By default
+  `precompile()` targets the baseline CPU of the architecture (`portable:
+  true`), because an artifact records the CPU features it was compiled to use
+  and a host lacking one refuses it: a CI runner with AVX-512 would otherwise
+  produce an artifact a plainer Lambda host cannot load. Pass `portable: false`
+  only when the machine that precompiles is the machine that runs.
+- **An artifact is native code — trust it like the `.so`.** Wasmtime does not
+  validate it, and it runs *outside* the sandbox with the host's authority. It
+  must come from your own pipeline, never from user input. Nothing is
+  auto-detected: `precompiled: true` is your explicit statement about those
+  bytes, and loading wasm with it (or an artifact without it) is refused.
+
+Artifacts are larger than the wasm they came from (the TypeScript guest: 29 MB
+→ 45 MB), so budget for the package size.
+
+The same trust applies to Wasmtime's on-disk module cache
+(`$XDG_CACHE_HOME/wasmtime`), which the extension enables on every engine: it
+also holds native code, so it must not be writable by anyone you would not let
+replace the `.so`. A deployment that loads artifacts never needs that cache.
 
 ## Build from source
 

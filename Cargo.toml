@@ -1,6 +1,6 @@
 [package]
 name = "terrarium"
-version = "1.2.1"
+version = "1.3.0"
 edition = "2021"
 description = "Expose a typed PHP SDK to a sandboxed guest language (JS/TS/Python/PHP) running inside a WebAssembly isolation boundary"
 license = "MIT"
@@ -19,6 +19,9 @@ wasmtime = "46"
 # the WASI SDK) get working clock/random/etc. Capability-only guests (Boa, the
 # example SDK guest) simply don't import any of it.
 wasmtime-wasi = "46"
+# The host triple, to precompile for an architecture's baseline CPU features
+# rather than the build machine's (a Wasmtime dependency already).
+target-lexicon = "0.13"
 # Value marshaling: a neutral MiddleValue (de)serialized to native msgpack, the
 # byte form carried across the host_call boundary.
 serde = { version = "1", features = ["derive"] }

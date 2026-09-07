@@ -29,9 +29,10 @@
  *    numbers stay exact. Non-erasable syntax (enum, namespace, ...) is a clear
  *    error rather than silent breakage.
  *
- * Lib SourceFiles are cached for the context's life. Identical source and SDK
- * text reuse the last Program and its checker state; per-call constraints and
- * schema extraction still run against the current options.
+ * Lib SourceFiles are cached for the context's life, and so is the parsed SDK
+ * .d.ts while its text is unchanged. Identical source and SDK text reuse the
+ * last Program and its checker state; per-call constraints and schema
+ * extraction still run against the current options.
  */
 (function () {
     "use strict";
@@ -41,15 +42,22 @@
     var lastProgram;
     var lastSource;
     var lastDts;
+    var sdkFile; // parsed "/sdk.d.ts" SourceFile, or undefined
+    var sdkFileText; // the text it was parsed from (RUNTIME_DTS + sdkDts)
+    var sdkFileLang; // the language target it was parsed under
 
     // A thrown compiler failure can leave a partially evaluated checker. Do
     // not reuse it on the next call; ordinary returned diagnostics are safe.
+    // The lib SourceFiles are exempt: they were parsed and bound during the
+    // build-time warm-up check (the Wizer snapshot), before any user source,
+    // so a later throw cannot catch one of them mid-bind.
     function discardProgramOnFailure(entrypoint) {
         return function (source, sdkDts, options) {
             try {
                 return entrypoint(source, sdkDts, options);
             } catch (e) {
                 lastProgram = lastSource = lastDts = undefined;
+                sdkFile = sdkFileText = sdkFileLang = undefined;
                 throw e;
             }
         };
@@ -119,6 +127,14 @@
     // Build the Program over [libs, runtime+sdk .d.ts, source]. Shared by the
     // diagnostics pass and by the type-argument schema extraction below, which
     // needs the same Program's TypeChecker.
+    //
+    // The parsed SDK .d.ts is cached beside the Program, and for the same
+    // reason the libs are: `createProgram(..., oldProgram)` reuses a file only
+    // when the host hands back the SAME SourceFile object, so re-parsing the
+    // declarations made every new source re-parse and re-bind the whole SDK --
+    // a cost linear in its size, paid per check. The cache holds only
+    // host-supplied declaration text, never user source: "/main.ts" changes per
+    // call and is parsed fresh, so no check can ever observe another's source.
     function buildProgram(source, sdkDts) {
         sdkDts = sdkDts || "";
         if (lastProgram && source === lastSource && sdkDts === lastDts) {
@@ -139,6 +155,17 @@
         };
         var host = {
             getSourceFile: function (name, lang) {
+                if (name === "/sdk.d.ts") {
+                    // `lang` is a fresh options object per createProgram, so
+                    // compare the target it carries, not its identity.
+                    var langVersion = lang && typeof lang === "object" ? lang.languageVersion : (lang || TARGET);
+                    if (sdkFileText !== files[name] || sdkFileLang !== langVersion) {
+                        sdkFile = ts.createSourceFile(name, files[name], lang || TARGET, true);
+                        sdkFileText = files[name];
+                        sdkFileLang = langVersion;
+                    }
+                    return sdkFile;
+                }
                 if (files[name] !== undefined) {
                     return ts.createSourceFile(name, files[name], lang || TARGET, true);
                 }
