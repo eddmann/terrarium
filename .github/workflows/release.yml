@@ -101,6 +101,9 @@ jobs:
         # when its system modules pick those up. Strip those vars for the dnf
         # call only — php-config and cargo still need them afterwards.
         run: |
+          # Keep the output directories owned by the runner so packaging can
+          # add the README and licenses after Docker writes the guest artifacts.
+          mkdir -p dist/precompiled
           docker run --rm --security-opt seccomp=unconfined \
             -v "$PWD":/src --entrypoint /bin/bash \
             "${{ matrix.image }}" -lc '
