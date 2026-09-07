@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] - 2026-09-07
+
+### Added
+
+- Added ahead-of-time compilation: `Terrarium::precompile()` (`Terrarium\Runtime::precompile()`) emits an artifact for the current extension build, loaded with `precompiled: true`, so a deployment without a usable module cache deserializes a guest instead of compiling it; artifacts are host-trusted native code, are never auto-detected, and share the compiled-guest cache.
+- Precompiled artifacts target the architecture's baseline CPU by default (`portable: true`), so one built on a newer machine loads on any host of that architecture; `tools/precompile-guests.php` precompiles a set of guests with checksums, and Lambda/Bref releases ship the TypeScript guest precompiled for each `.so` (without fuel metering).
+
+### Changed
+
+- Shared one compiled `Engine`/`Module`/`InstancePre` process-wide between Runtimes built from identical guest bytes and engine options, so repeat construction costs an instantiation instead of another compile, while each Runtime keeps its own Store, instance, limits, deadlines, fuel budget and capability table. Up to eight compiled guests stay resident per process.
+- Cached the parsed SDK declaration file inside the TypeScript compiler context, so checking a new source against unchanged `setTypes()` declarations no longer re-parses and re-binds them — removing a per-check cost that grew with the size of the `.d.ts`.
+
 ## [1.2.1] - 2026-08-28
 
 ### Changed
@@ -44,6 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Detected registered promise reactions that would otherwise allow a partial guest run to report success.
 - Cleared two RustSec advisories through the Wasmtime upgrade.
 
+[1.3.0]: https://github.com/eddmann/terrarium/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/eddmann/terrarium/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/eddmann/terrarium/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/eddmann/terrarium/compare/v1.0.0...v1.1.0

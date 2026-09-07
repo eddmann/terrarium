@@ -24,17 +24,39 @@
 //!     life, so guest linear memory accumulates across calls (a session/REPL).
 //!   - isolated (`isolated: true`): a fresh instance per call, cheaply made from
 //!     a pre-compiled `InstancePre`, so each call is hermetic.
+//!
+//! A guest may also be loaded from a *precompiled artifact* — the machine code
+//! `Runtime::precompile()` emits for this exact extension build — with
+//! `precompiled: true`, which skips Cranelift entirely (see `deserialize`). That
+//! is a host-trusted input, never guest input, and is never inferred: the flag
+//! is the host saying so.
+//!
+//! What is shared between `Runtime` objects: *only immutable compiled code*.
+//! Identical wasm bytes compiled under identical engine options resolve to one
+//! process-wide `Engine` + `Module` + `InstancePre` (see `compiled_guest`), so
+//! the second `new Runtime` of a guest costs an instantiation rather than a
+//! recompile/deserialize. Everything that isolates a run stays per Runtime and
+//! per `Store`: the `Store` itself, the `Instance` and its linear memory, the
+//! `StoreLimits` (`memoryLimit`), deadlines (`timeoutMs`), the fuel budget, and
+//! the capability table / handles / output buffer behind the bridge. A `Store`
+//! carries a pointer to its own Runtime's `BridgeState`, so a shared
+//! `InstancePre` still dispatches every `host_call` to the PHP callables of the
+//! Runtime that made the call.
 
 #![allow(non_snake_case)]
 
+use ext_php_rs::binary::Binary;
 use ext_php_rs::exception::PhpException;
 use ext_php_rs::prelude::*;
 use ext_php_rs::types::Zval;
 use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::rc::Rc;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use wasmtime::{
-    Caller, Config, Engine, Instance, InstancePre, Linker, Module, Store, StoreLimits,
+    Caller, Config, Engine, Instance, InstancePre, Linker, Module, Precompiled, Store, StoreLimits,
     StoreLimitsBuilder, Trap, UpdateDeadline,
 };
 
@@ -58,7 +80,38 @@ struct StoreState {
     limits: StoreLimits,
     wasi: wasmtime_wasi::p1::WasiP1Ctx,
     deadline: Option<Instant>,
+    /// The owning `Runtime`'s bridge state — the capability table every
+    /// `host_call` from this `Store` dispatches against. It is the `Store`, not
+    /// the `Linker`, that names the bridge: the compiled `InstancePre` is shared
+    /// process-wide between Runtimes built from the same bytes, so a call must
+    /// find *its own* Runtime's PHP callables through the data of the `Store`
+    /// it is running in.
+    ///
+    /// A raw pointer because the `host_call` closure must be `Send + Sync +
+    /// 'static` while `BridgeState` is `Rc`/`RefCell` (PHP is single-threaded,
+    /// NTS). Soundness, unchanged from when the address was captured in the
+    /// closure: the guest only ever runs on the PHP thread that owns the
+    /// `Runtime`, so the state is never touched concurrently, and the
+    /// `Rc<BridgeState>` allocation is owned by that `Runtime` — which outlives
+    /// every `Store` it creates (the shared `Store` is its own field; an
+    /// isolated one is a local of a call on it).
+    bridge: BridgePtr,
 }
+
+/// The address of a `Runtime`'s `BridgeState`, carried in its `Store`'s data.
+///
+/// Wasmtime's linker APIs require the store data to be `Send`, so the bridge
+/// can only travel as an address — exactly as it did when the closure captured
+/// one directly. (`Sync` is not needed: the closure captures nothing.)
+///
+/// SAFETY: the marker impl is sound under the invariant the whole extension
+/// rests on: PHP is single-threaded (NTS), a `Store` is only ever created and
+/// run on the thread that owns its `Runtime`, and nothing here ever hands the
+/// pointer to another thread. The pointee is `Rc<BridgeState>`, whose interior
+/// mutability is likewise only ever touched from that one thread.
+#[derive(Clone, Copy)]
+struct BridgePtr(*const BridgeState);
+unsafe impl Send for BridgePtr {}
 
 /// A persistent store + its instantiated guest (shared mode).
 struct Persistent {
@@ -73,13 +126,19 @@ struct Persistent {
 #[php_class]
 #[php(name = "Terrarium\\Runtime")]
 pub struct Terrarium {
+    /// Shared with every other Runtime holding the same `GuestKey`.
     engine: Engine,
-    /// Pre-resolved imports for cheap (re)instantiation.
+    /// Pre-resolved imports for cheap (re)instantiation. Shared likewise: it
+    /// resolves the `host_call` import to one closure that reads the calling
+    /// `Store`'s bridge pointer, never a particular Runtime's state.
     instance_pre: InstancePre<StoreState>,
-    state: Rc<BridgeState>,
     /// The persistent instance in shared mode; lazily created on first use.
     /// `None`/unused in isolated mode (a fresh instance is made per call).
+    /// Declared before `state` on purpose: its `Store` carries a pointer to
+    /// `state`, and Rust drops fields in declaration order, so the Store is
+    /// gone before the bridge it points at.
     shared: RefCell<Option<Persistent>>,
+    state: Rc<BridgeState>,
     isolated: bool,
     memory_limit: usize,
     timeout_ms: u64,
@@ -93,7 +152,13 @@ impl Terrarium {
     ///
     /// `isolated: true` runs each call in a fresh instance (hermetic); the
     /// default shares one persistent instance so guest state accumulates.
-    #[php(defaults(memoryLimit = None, timeoutMs = None, maxStack = None, fuel = None, isolated = false))]
+    ///
+    /// `precompiled: true` says `source` is not WebAssembly but an artifact from
+    /// `Runtime::precompile()` — machine code this same extension build emitted
+    /// — which is loaded without compiling. It must be built with the same
+    /// `fuel`-enabled setting; see `deserialize` for why the flag is required
+    /// rather than detected, and `precompile` for what an artifact is bound to.
+    #[php(defaults(memoryLimit = None, timeoutMs = None, maxStack = None, fuel = None, isolated = false, precompiled = false))]
     pub fn __construct(
         source: &Zval,
         memoryLimit: Option<i64>,
@@ -101,60 +166,75 @@ impl Terrarium {
         maxStack: Option<i64>,
         fuel: Option<i64>,
         isolated: bool,
+        precompiled: bool,
     ) -> PhpResult<Self> {
         // A PHP string is a byte string: take the raw `.wasm` bytes directly so
-        // binary modules (not valid UTF-8) are accepted.
-        let source = source
-            .zend_str()
-            .map(|s| s.as_bytes().to_vec())
-            .ok_or_else(|| {
-                PhpException::from_class::<TerrariumException>("source must be a string".to_owned())
-            })?;
+        // binary modules (not valid UTF-8) are accepted. Borrowed for the length
+        // of the constructor — a cache hit needs no copy of them at all, and a
+        // miss hands them straight to `Module::new`.
+        let source = source.zend_str().map(|s| s.as_bytes()).ok_or_else(|| {
+            PhpException::from_class::<TerrariumException>("source must be a string".to_owned())
+        })?;
 
         let memory_limit = memoryLimit.unwrap_or(0).max(0) as usize;
         let timeout_ms = timeoutMs.unwrap_or(0).max(0) as u64;
         let max_stack = maxStack.unwrap_or(0).max(0) as usize;
         let fuel = fuel.unwrap_or(0).max(0) as u64;
 
-        let mut config = Config::new();
-        // The exceptions proposal: wasi-sdk's setjmp/longjmp lowering (used by
-        // the PHP guest for zend_bailout) compiles to wasm try/throw.
-        config.wasm_exceptions(true);
-        // Cache compiled modules on disk so a heavy guest (e.g. a JS engine in
-        // wasm) is compiled once and reused across instances and processes.
-        if let Ok(cache) = wasmtime::Cache::from_file(None) {
-            config.cache(Some(cache));
-        }
-        // A runtime constructed unbounded can still receive a timed call later.
-        // Instrumentation must be enabled before compiling the module.
-        config.epoch_interruption(true);
-        if fuel > 0 {
-            config.consume_fuel(true);
-        }
-        if max_stack > 0 {
-            config.max_wasm_stack(max_stack);
+        // Which of the two loaders may see these bytes is settled here, before
+        // either does, so `deserialize` is only ever reached by bytes the host
+        // both claimed and Wasmtime recognised as its own artifact. Neither
+        // direction is silently corrected: taking wasm for an artifact would
+        // hand `Module::deserialize` unvalidated input, and taking an artifact
+        // for wasm would report a spurious parse error deep in `Module::new`.
+        match (precompiled, Engine::detect_precompiled(source)) {
+            (true, Some(Precompiled::Module)) => {}
+            (true, Some(_)) => {
+                return Err(PhpException::from_class::<TerrariumException>(
+                    "precompiled: source is a precompiled component, not a module: \
+                     Terrarium loads core modules only"
+                        .to_owned(),
+                ))
+            }
+            (true, None) => {
+                return Err(PhpException::from_class::<TerrariumException>(
+                    "precompiled: source is not a Wasmtime precompiled module. Produce it \
+                     with Terrarium\\Runtime::precompile() from this same extension build, \
+                     or drop precompiled: true to load WebAssembly"
+                        .to_owned(),
+                ))
+            }
+            (false, Some(_)) => {
+                return Err(PhpException::from_class::<TerrariumException>(
+                    "source is a precompiled Wasmtime artifact, not WebAssembly: pass \
+                     precompiled: true to load it (only ever for an artifact this \
+                     extension build produced — it is native code, not a sandboxed input)"
+                        .to_owned(),
+                ))
+            }
+            (false, None) => {}
         }
 
-        let engine = Engine::new(&config).map_err(|e| {
-            PhpException::from_class::<TerrariumException>(format!("engine: {e:#}"))
-        })?;
-        let module = Module::new(&engine, &source).map_err(|e| {
-            PhpException::from_class::<TerrariumException>(format!("compile: {e:#}"))
+        // Compiling a heavy guest (a JS engine in wasm) dominates construction
+        // even with the on-disk cache warm, because the artifact still has to be
+        // deserialized into a fresh `Engine` per instance. The compiled code is
+        // immutable and thread-safe, so identical bytes under identical engine
+        // options are compiled once per process and every later Runtime clones
+        // the (Arc-backed) handles.
+        let Compiled {
+            engine,
+            instance_pre,
+        } = compiled_guest(guest_key(source, precompiled, fuel > 0, max_stack), || {
+            if precompiled {
+                deserialize(source, fuel > 0, max_stack)
+            } else {
+                compile(source, fuel > 0, max_stack)
+            }
         })?;
 
-        // Build the bridge state and the single `host_call` import once, then
-        // pre-resolve imports into an `InstancePre` for cheap instantiation.
+        // The capability table is *not* shared: it is what distinguishes two
+        // Runtimes over the same guest, and each `Store` points back at its own.
         let state = BridgeState::new();
-        let mut linker = build_linker(&engine, &state)?;
-        // Define any imports the guest declares but we don't provide as traps,
-        // so guests that link extra runtime glue (e.g. a JS engine's unused
-        // clock) instantiate fine and only fail if they actually call them.
-        linker
-            .define_unknown_imports_as_traps(&module)
-            .map_err(|e| PhpException::from_class::<TerrariumException>(format!("link: {e:#}")))?;
-        let instance_pre = linker
-            .instantiate_pre(&module)
-            .map_err(|e| PhpException::from_class::<TerrariumException>(format!("link: {e:#}")))?;
 
         Ok(Terrarium {
             engine,
@@ -166,6 +246,79 @@ impl Terrarium {
             timeout_ms,
             fuel,
         })
+    }
+
+    /// Compile WebAssembly ahead of time and return the artifact bytes, to be
+    /// loaded later with `new Runtime($artifact, precompiled: true)`.
+    ///
+    /// This is the deployment escape hatch from Cranelift: a heavy guest costs
+    /// one to two seconds of compilation on first construction, which a
+    /// short-lived process (an AWS Lambda cold start, where the on-disk
+    /// `wasmtime::Cache` under `$HOME` is unusable anyway) pays in full. Run
+    /// this in the build pipeline, ship the artifact beside the guest, and the
+    /// deployed process only deserializes.
+    ///
+    /// The artifact is native machine code for **this exact extension build** —
+    /// this Wasmtime version, this target, this `Config`. Generate it with the
+    /// same binary that will load it; Wasmtime refuses anything else, but it is
+    /// a build-pipeline invariant rather than something to discover at run time.
+    ///
+    /// `fuel` and `maxStack` are the constructor's, and only in the sense
+    /// `GuestKey` uses them: the artifact is bound to whether fuel metering is
+    /// compiled in (the *budget* is per call), and `maxStack` is a run-time
+    /// engine setting that never reaches the artifact — it is accepted here so
+    /// one set of options describes both ends.
+    ///
+    /// `portable` (the default) compiles for the baseline of this machine's
+    /// architecture rather than for the CPU features Wasmtime detects on the
+    /// machine running `precompile()`. An artifact records the ISA features it
+    /// was compiled to use, and loading refuses one that needs a feature the
+    /// host lacks — so a build machine with AVX-512 would otherwise produce an
+    /// artifact a plainer Lambda host cannot load. The baseline costs the guest
+    /// little (the bundled engines are scalar interpreters). `portable: false`
+    /// compiles for the current CPU, for a machine that builds and runs.
+    #[php(defaults(maxStack = None, fuel = None, portable = true))]
+    pub fn precompile(
+        source: &Zval,
+        maxStack: Option<i64>,
+        fuel: Option<i64>,
+        portable: bool,
+    ) -> PhpResult<Binary<u8>> {
+        let source = source.zend_str().map(|s| s.as_bytes()).ok_or_else(|| {
+            PhpException::from_class::<TerrariumException>("source must be a string".to_owned())
+        })?;
+        if Engine::detect_precompiled(source).is_some() {
+            return Err(PhpException::from_class::<TerrariumException>(
+                "source is already a precompiled artifact: precompile() takes WebAssembly"
+                    .to_owned(),
+            ));
+        }
+
+        let max_stack = maxStack.unwrap_or(0).max(0) as usize;
+        let fuel = fuel.unwrap_or(0).max(0) as u64;
+
+        // The same `Config` the constructor would build for these options, so
+        // the artifact is loadable by exactly the engine that will load it. An
+        // explicit target (the host's own triple) is what turns off host CPU
+        // feature detection: Wasmtime then uses the triple's baseline ISA
+        // flags, and the loader accepts an artifact whose flags are a subset of
+        // the loading host's.
+        let mut config = engine_config(fuel > 0, max_stack);
+        if portable {
+            let triple = target_lexicon::Triple::host().to_string();
+            config.target(&triple).map_err(|e| {
+                PhpException::from_class::<TerrariumException>(format!(
+                    "precompile: cannot target {triple}: {e:#}"
+                ))
+            })?;
+        }
+        let engine = Engine::new(&config).map_err(|e| {
+            PhpException::from_class::<TerrariumException>(format!("engine: {e:#}"))
+        })?;
+        let artifact = engine.precompile_module(source).map_err(|e| {
+            PhpException::from_class::<TerrariumException>(format!("precompile: {e:#}"))
+        })?;
+        Ok(Binary::new(artifact))
     }
 
     /// Expose a PHP callable to the guest under a flat, dotted capability name.
@@ -502,6 +655,9 @@ impl Terrarium {
                 limits,
                 wasi,
                 deadline,
+                // This Runtime's capability table, for the `host_call` import of
+                // a possibly shared `InstancePre`. See `StoreState::bridge`.
+                bridge: BridgePtr(Rc::as_ptr(&self.state)),
             },
         );
         store.limiter(|s| &mut s.limits);
@@ -565,20 +721,262 @@ fn check_deadline(deadline: Option<Instant>) -> PhpResult<()> {
     Ok(())
 }
 
-/// Build a `Linker` providing the single `host_call` import. The closure must be
-/// `Send + Sync + 'static`, so it captures only the address of the bridge state
-/// and reconstructs the reference inside; this is sound because PHP is
-/// single-threaded (NTS) and the guest runs on the PHP thread, so the state is
-/// never touched concurrently and outlives the linker (both live on the `Terrarium`).
-fn build_linker(engine: &Engine, state: &Rc<BridgeState>) -> PhpResult<Linker<StoreState>> {
+/// How many distinct compiled guests are kept alive process-wide. A compiled
+/// engine is large (tens of MiB for a language engine), so the cache is a small
+/// fixed set rather than an unbounded map: a host that cycles through many
+/// different guests evicts the least recently *inserted* entry instead of
+/// retaining every guest it ever loaded. Eviction only drops this cache's
+/// handles — `Engine`/`Module`/`InstancePre` are `Arc`-backed, so an evicted
+/// guest stays alive and usable for as long as a `Runtime` holds it, and the
+/// next `Runtime` over those bytes simply compiles again.
+const GUEST_CACHE_CAPACITY: usize = 8;
+
+/// Identity of a compiled guest: the source bytes, how they are to be read, and
+/// every constructor option that reaches the `Config` and therefore the emitted
+/// machine code. Two Runtimes agreeing on all of it can share one compilation;
+/// anything else about them (memory limit, timeout, fuel *amount*, isolated) is
+/// applied per `Store` and so is deliberately absent here. `epoch_interruption`
+/// and `wasm_exceptions` are always on, and the on-disk cache is
+/// engine-external, so none of those vary.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct GuestKey {
+    /// SipHash-1-3 of the source bytes under a key drawn at random once per
+    /// process (`HASH_KEY`), with their length. The bytes are host input — the
+    /// host chooses which guest engine (or precompiled artifact) to load, and it
+    /// is the *guest program* that is untrusted — so a 64-bit digest, qualified
+    /// by an exact length, is enough to name a compilation. The secret key is
+    /// defence in depth for a deployment that lets someone else supply guest
+    /// bytes: without it a collision with a trusted guest could be prepared
+    /// offline (the digest is not collision-resistant with a known key) and
+    /// would then serve the wrong module to every later Runtime in the process;
+    /// with it, the only route is a blind search against a 64-bit keyed
+    /// function. Digesting every byte costs a linear pass over the guest on
+    /// each construction, which is the price of an exact identity: it is ~2
+    /// orders of magnitude below what it saves, and sampling the bytes instead
+    /// would risk answering with the wrong module.
+    source_hash: u64,
+    source_len: usize,
+    /// Whether those bytes are a precompiled artifact (`Module::deserialize`)
+    /// rather than WebAssembly (`Module::new`). Part of the identity because it
+    /// selects the loader, not merely the input: bytes that happened to hash
+    /// alike under the two readings name different modules, and a Runtime must
+    /// never be handed a compilation made by the other path.
+    precompiled: bool,
+    /// `fuel > 0` — whether `consume_fuel` instrumentation was compiled in. The
+    /// budget itself is per `Store`.
+    fuel: bool,
+    /// `maxStack`, 0 meaning Wasmtime's default.
+    max_stack: usize,
+}
+
+/// The per-process random key behind `GuestKey::source_hash` (see there).
+static HASH_KEY: OnceLock<RandomState> = OnceLock::new();
+
+fn guest_key(source: &[u8], precompiled: bool, fuel: bool, max_stack: usize) -> GuestKey {
+    let mut hasher = HASH_KEY.get_or_init(RandomState::new).build_hasher();
+    source.hash(&mut hasher);
+    GuestKey {
+        source_hash: hasher.finish(),
+        source_len: source.len(),
+        precompiled,
+        fuel,
+        max_stack,
+    }
+}
+
+/// One compiled guest, shared by every `Runtime` with the same `GuestKey`. All
+/// three handles are `Send + Sync` and clone as `Arc` bumps; all three are
+/// immutable — no run-time state of any Runtime lives in here.
+#[derive(Clone)]
+struct Compiled {
+    engine: Engine,
+    /// Holds the `Module` too (`instance_pre.module()`), so the entry is all
+    /// three shared handles.
+    instance_pre: InstancePre<StoreState>,
+}
+
+/// A fixed-capacity map that evicts in insertion order (least recently inserted
+/// first). Re-inserting an existing key refreshes its value without disturbing
+/// the order, so a hot guest cannot be kept alive purely by lookups either —
+/// the policy is deliberately trivial, and correctness never depends on a hit.
+struct BoundedCache<V> {
+    entries: HashMap<GuestKey, V>,
+    inserted: VecDeque<GuestKey>,
+    capacity: usize,
+}
+
+impl<V> BoundedCache<V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            inserted: VecDeque::new(),
+            capacity,
+        }
+    }
+
+    fn get(&self, key: &GuestKey) -> Option<&V> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: GuestKey, value: V) {
+        if self.entries.insert(key, value).is_none() {
+            self.inserted.push_back(key);
+        }
+        while self.inserted.len() > self.capacity {
+            if let Some(evicted) = self.inserted.pop_front() {
+                self.entries.remove(&evicted);
+            }
+        }
+    }
+}
+
+/// The process-wide compiled-guest cache. A `Mutex` (rather than a thread-local)
+/// because a `static` must be `Sync` — it is uncontended under PHP NTS, and the
+/// values it hands out are themselves `Send + Sync`, so nothing here assumes a
+/// single thread.
+static GUEST_CACHE: OnceLock<Mutex<BoundedCache<Compiled>>> = OnceLock::new();
+
+/// The compiled guest for `key`, compiling it via `build` on a miss. The lock
+/// is *not* held across the build: under PHP NTS there is no second thread to
+/// deduplicate against, and a guard held across seconds of compilation would be
+/// leaked -- not poisoned, leaked -- by any future PHP bailout inside it,
+/// blocking every later construction in the process. Two threads (ZTS) racing
+/// on one miss would merely both compile; the second insert replaces the first
+/// with an equivalent value.
+fn compiled_guest(
+    key: GuestKey,
+    build: impl FnOnce() -> PhpResult<Compiled>,
+) -> PhpResult<Compiled> {
+    let cache = GUEST_CACHE.get_or_init(|| Mutex::new(BoundedCache::new(GUEST_CACHE_CAPACITY)));
+    // A cache holds no invariant a panic could break, so a poisoned lock is
+    // simply taken (and a failed compile inserts nothing).
+    let lock = || {
+        cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    if let Some(hit) = lock().get(&key) {
+        return Ok(hit.clone());
+    }
+    let compiled = build()?;
+    lock().insert(key, compiled.clone());
+    Ok(compiled)
+}
+
+/// The `Config` a guest is compiled — or deserialized — under. One helper for
+/// both paths on purpose: a precompiled artifact is only loadable by an engine
+/// whose configuration matches the one that produced it, so the two must not be
+/// able to drift apart. Its arguments are exactly the engine-level options
+/// `GuestKey` names.
+///
+/// Because the resulting `Engine` is shared between every Runtime with the same
+/// key, any *resource* configured here is shared too. Nothing below allocates
+/// per-engine resources today; a future setting that does (the pooling
+/// instance allocator is the obvious one) would let one Runtime starve another
+/// and must either be keyed or kept off.
+fn engine_config(fuel: bool, max_stack: usize) -> Config {
+    let mut config = Config::new();
+    // The exceptions proposal: wasi-sdk's setjmp/longjmp lowering (used by
+    // the PHP guest for zend_bailout) compiles to wasm try/throw.
+    config.wasm_exceptions(true);
+    // Cache compiled modules on disk so a heavy guest (e.g. a JS engine in
+    // wasm) is compiled once and reused across instances and processes.
+    if let Ok(cache) = wasmtime::Cache::from_file(None) {
+        config.cache(Some(cache));
+    }
+    // A runtime constructed unbounded can still receive a timed call later.
+    // Instrumentation must be enabled before compiling the module.
+    config.epoch_interruption(true);
+    if fuel {
+        config.consume_fuel(true);
+    }
+    if max_stack > 0 {
+        config.max_wasm_stack(max_stack);
+    }
+    config
+}
+
+fn engine_for(fuel: bool, max_stack: usize) -> PhpResult<Engine> {
+    Engine::new(&engine_config(fuel, max_stack))
+        .map_err(|e| PhpException::from_class::<TerrariumException>(format!("engine: {e:#}")))
+}
+
+/// Compile wasm bytes into a shareable `Engine`/`Module`/`InstancePre` under the
+/// engine-level options that `GuestKey` names.
+fn compile(source: &[u8], fuel: bool, max_stack: usize) -> PhpResult<Compiled> {
+    let engine = engine_for(fuel, max_stack)?;
+    let module = Module::new(&engine, source)
+        .map_err(|e| PhpException::from_class::<TerrariumException>(format!("compile: {e:#}")))?;
+    link(engine, module)
+}
+
+/// Load a precompiled artifact (`Runtime::precompile`) instead of compiling —
+/// the same `Compiled`, without Cranelift.
+///
+/// `Module::deserialize` is `unsafe` for a reason that no check here removes:
+/// the bytes *are* machine code, and Wasmtime only lightly validates their
+/// framing. Substituted content is not caught, it simply runs — outside the
+/// sandbox, with the host's full authority. An artifact is therefore trusted
+/// exactly as the extension binary is: it must be produced by this build, in a
+/// build pipeline, and shipped alongside it. It must never be guest input, user
+/// upload, or anything else that crossed a trust boundary.
+///
+/// SAFETY: reachable only from `__construct` with an explicit `precompiled:
+/// true` from the host — never inferred from the bytes — and only after
+/// `Engine::detect_precompiled` has confirmed they carry Wasmtime's own
+/// precompiled-module framing, so a mistaken argument (wasm, a text file,
+/// arbitrary bytes) is refused before reaching this point rather than
+/// deserialized. That framing is a few ELF header bytes and is forgeable at
+/// will: it separates mistakes from artifacts, never attacks from artifacts. Beyond that framing check, the guarantee is the host's:
+/// Wasmtime's own contract is that the bytes came unmodified from
+/// `Engine::precompile_module`/`Module::serialize`. A *version* or `Config`
+/// mismatch is not part of that trust — Wasmtime detects it deterministically
+/// and it surfaces here as a `Terrarium\Exception`.
+fn deserialize(source: &[u8], fuel: bool, max_stack: usize) -> PhpResult<Compiled> {
+    let engine = engine_for(fuel, max_stack)?;
+    let module = unsafe { Module::deserialize(&engine, source) }.map_err(|e| {
+        PhpException::from_class::<TerrariumException>(format!(
+            "precompiled: {e:#} (an artifact is only loadable by the extension build \
+             that produced it, under the same fuel setting)"
+        ))
+    })?;
+    link(engine, module)
+}
+
+/// Resolve a module's imports into the shareable `Compiled` both loaders return.
+fn link(engine: Engine, module: Module) -> PhpResult<Compiled> {
+    // Build the single `host_call` import once, then pre-resolve imports into an
+    // `InstancePre` for cheap instantiation.
+    let mut linker = build_linker(&engine)?;
+    // Define any imports the guest declares but we don't provide as traps,
+    // so guests that link extra runtime glue (e.g. a JS engine's unused
+    // clock) instantiate fine and only fail if they actually call them.
+    linker
+        .define_unknown_imports_as_traps(&module)
+        .map_err(|e| PhpException::from_class::<TerrariumException>(format!("link: {e:#}")))?;
+    let instance_pre = linker
+        .instantiate_pre(&module)
+        .map_err(|e| PhpException::from_class::<TerrariumException>(format!("link: {e:#}")))?;
+
+    Ok(Compiled {
+        engine,
+        instance_pre,
+    })
+}
+
+/// Build a `Linker` providing the single `host_call` import. It captures nothing
+/// Runtime-specific: the closure must be `Send + Sync + 'static`, and — because
+/// the resulting `InstancePre` is shared process-wide between Runtimes over the
+/// same guest — it must dispatch to the capability table of whichever Runtime is
+/// calling. It therefore reads the bridge pointer out of the calling `Store`
+/// (`caller.data()`), whose soundness argument is on `StoreState::bridge`.
+fn build_linker(engine: &Engine) -> PhpResult<Linker<StoreState>> {
     let mut linker = Linker::new(engine);
 
     // WASI preview1, for guests built against a libc (e.g. QuickJS via the WASI
     // SDK). Capability-only guests import none of it; the defs are then unused.
     wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |s: &mut StoreState| &mut s.wasi)
         .map_err(|e| PhpException::from_class::<TerrariumException>(format!("wasi: {e:#}")))?;
-
-    let state_addr = Rc::as_ptr(state) as usize;
 
     linker
         .func_wrap(
@@ -590,8 +988,12 @@ fn build_linker(engine: &Engine, state: &Rc<BridgeState>) -> PhpResult<Linker<St
                   args_ptr: i32,
                   args_len: i32|
                   -> Result<i64, wasmtime::Error> {
-                // SAFETY: single-threaded; see the doc comment above.
-                let state: &BridgeState = unsafe { &*(state_addr as *const BridgeState) };
+                // The Runtime whose `eval` is running, not the one that built
+                // the (shared) linker.
+                let BridgePtr(bridge) = caller.data().bridge;
+                // SAFETY: single-threaded, and the pointee outlives this call;
+                // see the `StoreState::bridge` doc comment.
+                let state: &BridgeState = unsafe { &*bridge };
 
                 let memory = caller
                     .get_export("memory")
@@ -754,4 +1156,152 @@ pub fn module(module: ModuleBuilder) -> ModuleBuilder {
         .class::<TerrariumMemoryException>()
         .class::<TerrariumGuestException>()
         .class::<Terrarium>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keys_for(sources: usize) -> Vec<GuestKey> {
+        (0..sources)
+            .map(|n| guest_key(&[n as u8], false, false, 0))
+            .collect()
+    }
+
+    #[test]
+    fn identical_bytes_and_options_name_one_compilation() {
+        // Two separately loaded copies of one guest must land on one entry.
+        let loaded = b"\0asm\x01\0\0\0 a guest".to_vec();
+        let reloaded = b"\0asm\x01\0\0\0 a guest".to_vec();
+        assert_eq!(
+            guest_key(&loaded, false, true, 4096),
+            guest_key(&reloaded, false, true, 4096)
+        );
+    }
+
+    #[test]
+    fn every_engine_level_option_separates_the_key() {
+        let source = b"\0asm\x01\0\0\0 a guest";
+        let base = guest_key(source, false, false, 0);
+        // Fuel instrumentation and the stack bound are compiled in, so they
+        // cannot share a compilation. Different bytes never can either.
+        assert_ne!(base, guest_key(source, false, true, 0));
+        assert_ne!(base, guest_key(source, false, false, 1 << 20));
+        assert_ne!(
+            guest_key(source, false, true, 0),
+            guest_key(source, false, true, 1 << 20)
+        );
+        assert_ne!(
+            base,
+            guest_key(b"\0asm\x01\0\0\0 another guest", false, false, 0)
+        );
+        // Lengths that differ only by a trailing byte still differ.
+        assert_ne!(
+            base,
+            guest_key(b"\0asm\x01\0\0\0 a guest ", false, false, 0)
+        );
+    }
+
+    #[test]
+    fn a_portable_artifact_targets_the_baseline_and_loads_natively() {
+        // What `precompile(portable: true)` produces must load through the
+        // constructor's own (native) engine config on the machine that built
+        // it; it does on any other host of the architecture too, because the
+        // loader accepts an artifact whose enabled ISA features the host has,
+        // and the baseline enables none beyond the architecture's own.
+        // Pinning the target is what switches host feature detection off:
+        // wherever this CPU has features beyond the baseline, the two engine
+        // configurations must therefore differ (Wasmtime hashes the ISA flags
+        // into its compatibility hash); on a baseline machine they coincide.
+        let wat = br#"(module (func (export "f") (result i32) i32.const 42))"#;
+        let mut pinned = engine_config(false, 0);
+        pinned
+            .target(&target_lexicon::Triple::host().to_string())
+            .unwrap();
+        let pinned = Engine::new(&pinned).unwrap();
+        let native = Engine::new(&engine_config(false, 0)).unwrap();
+
+        let portable = pinned.precompile_module(wat).unwrap();
+        unsafe { Module::deserialize(&native, &portable) }
+            .expect("portable artifact, native engine");
+
+        let fingerprint = |engine: &Engine| {
+            let mut hasher = std::hash::DefaultHasher::new();
+            engine.precompile_compatibility_hash().hash(&mut hasher);
+            hasher.finish()
+        };
+        let native_artifact = native.precompile_module(wat).unwrap();
+        if fingerprint(&native) == fingerprint(&pinned) {
+            assert_eq!(
+                portable, native_artifact,
+                "a baseline machine: the configs coincide"
+            );
+        } else {
+            assert_ne!(
+                portable, native_artifact,
+                "pinning the target must change the ISA flags"
+            );
+        }
+    }
+
+    #[test]
+    fn the_loader_is_part_of_the_identity() {
+        // Bytes read as a precompiled artifact are a different module from the
+        // same bytes read as WebAssembly, however they hash: one is native code
+        // handed to `Module::deserialize`, the other wasm handed to
+        // `Module::new`. Nothing may serve a cached compilation across that.
+        let source = b"\0asm\x01\0\0\0 a guest";
+        assert_ne!(
+            guest_key(source, false, false, 0),
+            guest_key(source, true, false, 0)
+        );
+        // And the artifact reading keeps every other distinction the wasm one
+        // makes, so an artifact never borrows another's engine options either.
+        let artifact = guest_key(source, true, false, 0);
+        assert_ne!(artifact, guest_key(source, true, true, 0));
+        assert_ne!(artifact, guest_key(source, true, false, 1 << 20));
+        assert_eq!(artifact, guest_key(source, true, false, 0));
+    }
+
+    #[test]
+    fn per_store_settings_are_absent_from_the_key() {
+        // memoryLimit / timeoutMs / the fuel *amount* / isolated never reach
+        // `guest_key`, which takes only what `Config` consumes.
+        let source = b"\0asm\x01\0\0\0";
+        assert_eq!(
+            guest_key(source, false, true, 4096),
+            guest_key(source, false, true, 4096)
+        );
+    }
+
+    #[test]
+    fn the_cache_evicts_the_least_recently_inserted() {
+        let keys = keys_for(GUEST_CACHE_CAPACITY + 3);
+        let mut cache = BoundedCache::new(GUEST_CACHE_CAPACITY);
+        for (n, key) in keys.iter().enumerate() {
+            cache.insert(*key, n);
+        }
+        assert_eq!(cache.entries.len(), GUEST_CACHE_CAPACITY);
+        assert_eq!(cache.inserted.len(), GUEST_CACHE_CAPACITY);
+        for (n, key) in keys.iter().enumerate() {
+            if n < 3 {
+                assert_eq!(cache.get(key), None, "entry {n} should have been evicted");
+            } else {
+                assert_eq!(cache.get(key), Some(&n));
+            }
+        }
+    }
+
+    #[test]
+    fn re_inserting_a_key_replaces_it_without_growing_the_cache() {
+        let keys = keys_for(2);
+        let mut cache = BoundedCache::new(GUEST_CACHE_CAPACITY);
+        for key in &keys {
+            cache.insert(*key, 1);
+        }
+        cache.insert(keys[0], 2);
+        assert_eq!(cache.get(&keys[0]), Some(&2));
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.inserted.len(), 2);
+    }
 }

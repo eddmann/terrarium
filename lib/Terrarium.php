@@ -52,6 +52,39 @@ final class Terrarium
     private Runtime $rt;
 
     /**
+     * Compile a guest `.wasm` ahead of time and return the artifact bytes to
+     * write next to it — the deployment counterpart of `precompiled: true`.
+     *
+     * A heavy guest costs one to two seconds of compilation the first time a
+     * process constructs it, which a short-lived process (an AWS Lambda cold
+     * start, where the on-disk module cache under `$HOME` is unusable) pays
+     * every time. Run this in the build pipeline instead:
+     *
+     *     file_put_contents('quickjs_guest.cwasm', Terrarium::precompile('quickjs_guest.wasm'));
+     *     // deployed: new Terrarium('quickjs_guest.cwasm', precompiled: true)
+     *
+     * The artifact is native machine code for the **exact extension build**
+     * that produced it (Wasmtime version, target, configuration), so generate
+     * it with the same binary that will load it. Pass the same `fuel` and
+     * `maxStack` you will construct with: only whether fuel metering is on is
+     * actually baked in (and enforced on load), `maxStack` is a run-time engine
+     * setting, but naming both keeps one set of options describing both ends.
+     *
+     * `$portable` (default) compiles for the architecture's baseline CPU, so
+     * an artifact built on a newer machine loads on a plainer one (a Lambda
+     * host); `false` compiles for the current CPU's features instead.
+     */
+    public static function precompile(string $path, ?int $maxStack = null, ?int $fuel = null, bool $portable = true): string
+    {
+        $bytes = @file_get_contents($path);
+        if ($bytes === false) {
+            throw new \RuntimeException("cannot read guest wasm: $path");
+        }
+
+        return Runtime::precompile($bytes, maxStack: $maxStack, fuel: $fuel, portable: $portable);
+    }
+
+    /**
      * Load a guest from a `.wasm` file. Limits default to unbounded; pass
      * non-zero values to contain resource abuse. `isolated: true` runs each
      * `eval()` in a fresh wasm instance; the default reuses one (cheaper, and it
@@ -79,6 +112,16 @@ final class Terrarium
      * `eval()` and `check()` behave exactly as before, and a call to a listed
      * callee written WITHOUT a type argument is untouched.
      *
+     * `precompiled: true` says `$path` is not a `.wasm` but an artifact from
+     * `Terrarium::precompile()`: machine code loaded without compiling, which
+     * is what makes a cold start cheap and removes the need for a writable
+     * module-cache directory. It is TRUSTED LIKE THE EXTENSION BINARY ITSELF —
+     * Wasmtime does not validate it, so it runs outside the sandbox — and must
+     * only ever be an artifact your own build pipeline produced, never
+     * something a user supplied. Construct it with the same `fuel` setting it
+     * was precompiled with; an artifact is refused if that differs, and refused
+     * outright if it came from another extension build.
+     *
      * @param list<string>|null $typeArgumentSchemas
      */
     public function __construct(
@@ -90,6 +133,7 @@ final class Terrarium
         bool $isolated = false,
         bool $syncOnly = false,
         ?array $typeArgumentSchemas = null,
+        bool $precompiled = false,
     ) {
         $bytes = @file_get_contents($path);
         if ($bytes === false) {
@@ -102,6 +146,7 @@ final class Terrarium
             maxStack: $maxStack,
             fuel: $fuel,
             isolated: $isolated,
+            precompiled: $precompiled,
         );
         $options = [];
         if ($syncOnly) {

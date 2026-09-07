@@ -32,9 +32,9 @@ that runtime.
 
 A Wasmtime **`Instance`** owns the guest's linear memory — the engine's compiled
 code and any state it keeps *between* the per-eval runtimes it spins up. The
-`Engine`/`Store` own the compiled module and the limits. Everything the bridge
-needs — the capability dispatch table, the handle table, the output buffer —
-lives host-side.
+`Store` owns that instance and its limits; the `Engine`/`Module` own only the
+compiled code. Everything the bridge needs — the capability dispatch table, the
+handle table, the output buffer — lives host-side.
 
 | | Shared (default) | Isolated (`isolated: true`) |
 |---|---|---|
@@ -45,9 +45,40 @@ lives host-side.
 | Registered capabilities / handles | work | work |
 | Output capture (`output()`) | works | works |
 | Per-call limits (memory/time/fuel) | yes | yes |
+| Compiled code (`Engine`/`Module`/`InstancePre`) | shared with every `Terrarium` over the same bytes and engine options | same |
+| Store, instance, linear memory, limits, deadlines, fuel, capabilities | this `Terrarium`'s alone | this `Terrarium`'s alone |
 
 Because capabilities exchange **data, not functions** — closures never cross the
 boundary — there is no callback-that-outlives-its-eval hazard in either mode.
+
+## What two `Terrarium` objects share — and what they never do
+
+Constructing a second `Terrarium` from the same `.wasm` does **not** compile it
+again: identical bytes read the same way (as wasm, or as a
+[precompiled artifact](api.md#static-precompilestring-path-int-maxstack--null-int-fuel--null-bool-portable--true-string))
+under identical engine-level options (whether fuel metering is on, and
+`maxStack`) resolve to one process-wide `Engine`, `Module` and `InstancePre`, so
+the second construction costs a hash of the bytes plus an instantiation rather
+than another compile: for the 28 MB TypeScript guest, about 8 ms (release build)
+against the ~300 ms it previously spent being deserialized on every
+construction. The cache holds a small, fixed number of distinct guests and
+evicts the least recently inserted; an evicted compilation stays alive for any
+`Terrarium` still holding it. Note the flip side: up to that many compiled guests
+stay resident for the life of the process even after every `Terrarium` over
+them is gone (that is what makes the next construction cheap), and this memory
+is outside any `memoryLimit` — for a heavy guest, on the order of its artifact
+size per entry.
+
+Compiled code is immutable, so this shares nothing that isolates a run. Each
+`Terrarium` keeps its own `Store` and instance (and so its own linear memory),
+its own `memoryLimit`, `timeoutMs` deadlines and fuel budget, and its own
+capability table, granted handles and output buffer. Two Runtimes over one guest
+can register *different* callables under the *same* name and each call reaches
+its own: a `Store` carries a pointer to its own Runtime's bridge, so the shared
+`host_call` import dispatches against whichever Runtime is executing. A
+capability registered on one is unknown to the other, a timeout or trap on one
+leaves the other running, and neither can see the other's output — see
+[tests/php/13_shared_engine.php](../tests/php/13_shared_engine.php).
 
 ## Shared mode — reuse the instance, keep the engine warm
 
@@ -70,7 +101,8 @@ enclosing deadline does not require rebuilding the Runtime. An explicit positive
 timeout covers initialization; omitted/null preserves the constructor default's
 historical setup exemption.
 
-Reset retains Engine/InstancePre and all host state: callbacks, declarations,
+Reset retains the compiled guest (the process-wide `Engine`/`Module`/`InstancePre`,
+which it never owned alone) and all host state: callbacks, declarations,
 compile options, output and granted handles. Registering an existing name
 replaces its callable, but removing a declaration does not revoke that callable.
 For session reuse, refresh fixed callback slots and declarations/options before
@@ -113,5 +145,8 @@ instance usable.
   eval, so you get inter-eval isolation of the guest program for free.
 - **Isolated:** when you want a guaranteed-fresh linear memory per call as
   defense-in-depth, and can afford per-call engine bring-up.
-- **Strongest isolation:** a brand-new `Terrarium` per tenant — a fresh
-  `Engine`/`Store`, a separate compiled module and its own limits.
+- **Strongest isolation:** a brand-new `Terrarium` per tenant — its own
+  `Store`, instance and linear memory, its own limits and deadlines, and its own
+  capability table, handles and output. The compiled code behind it is shared
+  with any other `Terrarium` over the same guest, which is immutable and carries
+  no tenant state.

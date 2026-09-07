@@ -66,7 +66,10 @@ php -d extension=$(pwd)/target/debug/libterrarium.so examples/four_langs.php
 
 ## Threading
 
-PHP here is **NTS** (non-thread-safe) — one OS thread. The Wasmtime `Engine`,
-`Store`, `Instance`, all `zval`s, and the bridge state live on that thread, so
-the implementation uses `Rc`/`RefCell` rather than `Arc`/`Mutex`. Nothing crosses
-a thread boundary.
+PHP here is **NTS** (non-thread-safe) — one OS thread. The `Store`, `Instance`,
+all `zval`s, and the bridge state live on that thread, so the implementation uses
+`Rc`/`RefCell` rather than `Arc`/`Mutex`, and no PHP value ever crosses a thread
+boundary. The two exceptions are both immutable or self-contained: a timeout's
+epoch timer, which only ticks its `Engine` from its own thread, and the
+process-wide cache of compiled guests (`Engine`/`Module`/`InstancePre` behind a
+`Mutex`), which holds compiled code and no run-time state.

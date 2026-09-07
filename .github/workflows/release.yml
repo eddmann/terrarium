@@ -123,6 +123,28 @@ jobs:
               objdump -T dist/terrarium.so | grep -oE "GLIBC_[0-9.]+" | sort -V | uniq | tail -3
             '
 
+      # The TypeScript guest (the heavy one: 1-2 s of compilation per cold
+      # start), precompiled by THIS .so inside the same image, so the artifact
+      # is bound to the exact build it ships with (Wasmtime version, target,
+      # config). Portable by default: precompile() targets the architecture's
+      # baseline CPU, not the runner's, so the artifact loads on any Lambda
+      # host of that arch. Compiled without fuel metering (which is compiled
+      # in), so it is for Runtimes constructed without `fuel:`; a `fuel:`
+      # deployment, or any other guest, precompiles its own with
+      # tools/precompile-guests.php (docs/install.md). The script also loads
+      # the artifact back before writing it.
+      - name: Precompile guests in Bref image (${{ matrix.image }})
+        run: |
+          docker run --rm --security-opt seccomp=unconfined \
+            -v "$PWD":/src --entrypoint /bin/bash \
+            "${{ matrix.image }}" -lc '
+              set -euo pipefail
+              cd /src
+              # The script refuses to run if the extension did not load.
+              php="/opt/bin/php -d extension=/src/dist/terrarium.so"
+              $php tools/precompile-guests.php dist/precompiled tests/wasm/typescript_guest.wasm
+            '
+
       - name: Package Bref Lambda layer
         run: |
           ver="${{ inputs.version }}"; php="${{ matrix.php }}"; arch="${{ matrix.arch }}"
@@ -136,6 +158,42 @@ jobs:
           echo 'extension=terrarium.so' > layer/bref/etc/php/conf.d/ext-terrarium.ini
           ( cd layer && zip -qr "../terrarium-v${ver}-php${php}-lambda-bref-${arch}.zip" . )
           cp dist/terrarium.so "terrarium-v${ver}-php${php}-lambda-bref-${arch}.so"
+
+          # The precompiled guest, in a zip naming the .so it belongs to so a
+          # mismatched pair is obvious before Wasmtime refuses it.
+          so_sha="$(sha256sum dist/terrarium.so | cut -d' ' -f1)"
+          printf '%s\n' \
+            "# Precompiled TypeScript guest for terrarium-v${ver}-php${php}-lambda-bref-${arch}.so" \
+            "" \
+            "Native machine code emitted by that exact extension build (sha256 ${so_sha})," \
+            "compiled for the ${arch} baseline CPU, without fuel metering. Load with" \
+            "new Terrarium\\Terrarium('/var/task/typescript_guest.cwasm', precompiled: true)" \
+            "on a Runtime constructed without fuel:. It loads only with that .so; any" \
+            "other build refuses it. Verify against SHA256SUMS. An artifact is trusted" \
+            "like the .so itself: never load one from an untrusted source. See" \
+            "docs/install.md." \
+            > dist/precompiled/README.md
+          cp LICENSE THIRD_PARTY_LICENSES.md dist/precompiled/
+          cp -R guests/typescript/third-party dist/precompiled/third-party
+          ( cd dist/precompiled && zip -qr "$GITHUB_WORKSPACE/terrarium-v${ver}-php${php}-lambda-bref-${arch}-precompiled-guests.zip" . )
+          ls -lh terrarium-*.zip
+
+      - name: Assert the precompiled archive carries its licenses
+        run: |
+          ver="${{ inputs.version }}"; php="${{ matrix.php }}"; arch="${{ matrix.arch }}"
+          listing="$(unzip -Z1 "terrarium-v${ver}-php${php}-lambda-bref-${arch}-precompiled-guests.zip")"
+          for entry in \
+            LICENSE \
+            THIRD_PARTY_LICENSES.md \
+            third-party/README.md \
+            third-party/typescript/LICENSE.txt \
+            third-party/typescript/ThirdPartyNoticeText.txt \
+            third-party/ts-blank-space/LICENSE \
+            typescript_guest.cwasm
+          do
+            grep -qxF "$entry" <<<"$listing" \
+              || { echo "::error::precompiled guests archive is missing $entry"; exit 1; }
+          done
 
       - uses: actions/upload-artifact@v4
         with:

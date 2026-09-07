@@ -300,6 +300,26 @@ The honest residual: a bug in *Wasmtime itself* is in the trust base. But that's
 a small, Rust, memory-safe, heavily-fuzzed surface — a far better bet than
 trusting every bundled language engine's C codebase.
 
+Two host-side inputs extend that trust base with native code. The first is
+opted into deliberately: a **precompiled artifact** (`Terrarium::precompile()`, loaded with `precompiled: true`). An
+artifact is not WebAssembly — it is the *machine code* Cranelift emitted, and
+`Module::deserialize` only checks its framing, so its contents are executed with
+the host's full authority, outside the sandbox. It is therefore trusted exactly
+as `libterrarium.so` is: produced by the same extension build, in the host's own
+build pipeline, and never sourced from guest input, an upload, or anything else
+that crossed a trust boundary. Nothing infers it — the flag is the host saying
+so, and bytes that are not a Wasmtime precompiled module are refused before
+`deserialize` sees them. The *guest program* remains untrusted either way: it
+runs in the same sandbox, under the same limits, whichever way the module got
+there.
+
+The second is less visible: Wasmtime's **on-disk module cache**
+(`$XDG_CACHE_HOME/wasmtime`, enabled on every engine) stores and reloads
+Cranelift's native output, so whoever can write to that directory can supply
+native code just as an artifact does. Treat the cache directory as part of the
+trust base, with the same permissions as the extension binary. A deployment
+that ships precompiled artifacts no longer needs it.
+
 ---
 
 ## 10. Execution modes
@@ -314,7 +334,11 @@ trusting every bundled language engine's C codebase.
 - **Isolated:** a fresh `Store`/`Instance` per call, discarded after. The
   `Module` is compiled once and instantiated cheaply via `InstancePre` — this is
   the part Wasmtime makes *fast*. A guaranteed-fresh linear memory each call.
-- **Strongest:** a fresh `Engine`/`Store` per tenant → separate everything.
+- **Strongest:** a fresh `Terrarium` per tenant → its own `Store`, instance,
+  linear memory, limits and capability table. The `Engine`/`Module`/`InstancePre`
+  behind it is compiled once per (bytes, engine options) and shared process-wide;
+  it is immutable, and each `Store` names its own bridge, so nothing that
+  isolates a tenant is shared with it.
 
 One caveat worth stating precisely: the bundled guests each run an `eval` in a
 **fresh language runtime** (a new JS runtime / Python interpreter per call), so
@@ -399,8 +423,9 @@ rest. The guest stays dumb and all policy lives host-side.
 - Per-call serialization into linear memory has higher baseline overhead than an
   in-process engine value (still fast; just not free).
 - Guest artifacts are larger (a whole language runtime in WASM) and have a
-  cold-start cost — mitigated with on-disk module caching (`wasmtime::Cache`) +
-  `InstancePre`, and for a guest that bootstraps heavy state (the TypeScript
+  cold-start cost — mitigated with on-disk module caching (`wasmtime::Cache`),
+  ahead-of-time compilation for deployments where that cache cannot be kept
+  (§9), + `InstancePre`, and for a guest that bootstraps heavy state (the TypeScript
   compiler + lib parse) with **build-time pre-initialization** via Wizer, which
   bakes the warmed heap into the module so first eval — and every fresh isolated
   instance — starts warm (§13). The cost it trades back is a larger fixture.
