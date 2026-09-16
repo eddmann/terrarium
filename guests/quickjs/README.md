@@ -13,9 +13,16 @@ make quickjs-guest      # WASI_SDK=/path/to/wasi-sdk
 
 `build.sh` downloads the pinned quickjs-ng source (`v0.16.2`, not vendored),
 compiles `quickjs_guest.c` + the engine (`quickjs.c`, `libregexp.c`,
-`libunicode.c`, `dtoa.c`) with a 1 MiB linker stack, and copies the result to
-`tests/wasm/quickjs_guest.wasm` (the committed fixture). Needs a
+`libunicode.c`, `dtoa.c`) with a 1 MiB linker stack placed first, and copies the
+result to `tests/wasm/quickjs_guest.wasm` (the committed fixture). Needs a
 [WASI SDK](https://github.com/WebAssembly/wasi-sdk); nothing at runtime.
+
+That stack is reachable: QuickJS recurses in C per JS call and its own stack
+guard is compiled out on wasi, so recursion around depth 3100 exhausts the
+shadow stack before Wasmtime's native `maxStack` limit would fire. `--stack-first`
+is what makes that a deterministic out-of-bounds trap at the frame that
+overflowed, rather than the stack growing down into the static data below it;
+see `build.sh` for the measurement.
 
 ## The guest contract
 

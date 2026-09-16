@@ -52,6 +52,21 @@ final class Terrarium
     private Runtime $rt;
 
     /**
+     * Whether this extension build can compile WebAssembly.
+     *
+     * `false` is a *runtime-only* build: it loads artifacts (`precompiled:
+     * true`) and refuses both raw `.wasm` and `precompile()`, which is what a
+     * deployment that ships prebuilt artifacts wants — there is no Cranelift in
+     * it to carry. Everything else on this class behaves identically, so this is
+     * the only thing worth branching on: assert it at boot, or skip a code path
+     * that would precompile.
+     */
+    public static function hasCompiler(): bool
+    {
+        return Runtime::hasCompiler();
+    }
+
+    /**
      * Compile a guest `.wasm` ahead of time and return the artifact bytes to
      * write next to it — the deployment counterpart of `precompiled: true`.
      *

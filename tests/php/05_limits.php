@@ -55,6 +55,22 @@ check('a generous memory limit runs fine', function () use ($wasm) {
     eq(3, $g->eval('1 + 2'));
 });
 
+echo "\nmaxStack ceiling\n";
+check('2 MiB is the most native stack a Runtime may ask for', function () use ($wasm) {
+    // The guests' linear-memory stacks are sized against this ceiling
+    // (guests/*/build.sh), so it is the extension's own contract, not a
+    // Wasmtime accident: exactly 2 MiB is accepted, one byte more is refused.
+    $g = new Terrarium($wasm, maxStack: 2 << 20);
+    eq(2, $g->eval('1 + 1'));
+    throws(TerrariumException::class, fn () => new Terrarium($wasm, maxStack: (2 << 20) + 1));
+    try {
+        new Terrarium($wasm, maxStack: 8 << 20);
+        throw new RuntimeException('expected a refusal');
+    } catch (TerrariumException $e) {
+        contains($e->getMessage(), 'maxStack cannot exceed');
+    }
+});
+
 echo "\nexecution modes\n";
 check('shared (default): one persistent instance backs eval()', function () use ($wasm) {
     $g = new Terrarium($wasm);                 // shared by default

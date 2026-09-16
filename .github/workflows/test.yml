@@ -74,6 +74,22 @@ jobs:
             php -d extension="$EXT" "$ex" > /dev/null || exit 1
           done
 
+      # The runtime-only extension (`--no-default-features`): no Cranelift, no
+      # precompile(), no on-disk module cache — it loads precompiled artifacts
+      # and nothing else. It has its own target directory because it differs
+      # from the default build only in features: sharing target/debug would
+      # overwrite the .so the steps above load and force a full rebuild back.
+      # It stays under target/, so Swatinem/rust-cache still covers it.
+      - name: Rust unit tests (runtime-only)
+        run: cargo test --lib --no-default-features --target-dir target/runtime
+
+      # Builds the full extension, precompiles the QuickJS and TypeScript
+      # guests with it, then runs tests/php/runtime/ against the runtime-only
+      # extension and those artifacts — the pairing the Lambda `-runtime` layer
+      # ships, exercised on every push.
+      - name: Runtime-only suite
+        run: make test-runtime
+
   # Audit the committed Cargo.lock against the RustSec advisory database.
   audit:
     name: cargo audit

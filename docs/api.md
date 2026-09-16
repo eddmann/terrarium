@@ -26,7 +26,11 @@ non-zero values to contain resource abuse:
   interruption). Omitted/null operation arguments retain the historical setup
   exemption; an explicit positive override also covers guest initialization.
   See [per-call timeouts](#per-call-timeouts).
-- **`maxStack`** (bytes) — the native call-stack cap.
+- **`maxStack`** (bytes) — the native call-stack cap, at most 2 MiB (2,097,152);
+  more is refused with a `Terrarium\Exception`. Exhausting it is a
+  `Terrarium\TrapException` (`call stack exhausted`) the guest cannot catch — on
+  wasi the bundled QuickJS engine has no JS-level stack guard, so there is no
+  `RangeError` path.
 - **`fuel`** — deterministic instruction metering (an alternative to `timeoutMs`
   for reproducible runs); exhaustion raises `Terrarium\TimeoutException`.
 - **`isolated`** — `true` runs each `eval()` in a fresh instance (hermetic); the
@@ -106,6 +110,34 @@ The engine primitive underneath takes **bytes** rather than paths, on both ends:
 $artifact = Terrarium\Runtime::precompile($wasmBytes, fuel: 1);
 $rt       = new Terrarium\Runtime($artifact, precompiled: true, fuel: 5_000_000);
 ```
+
+### `static hasCompiler(): bool`
+
+The extension can be built **without a compiler**
+(`cargo build --release --no-default-features`), for a deployment that only
+ever loads precompiled artifacts: no Cranelift, no `precompile()`, no on-disk
+module cache. The Lambda release artifacts ending in `-runtime` are that build
+— see [runtime-only build](install.md#runtime-only-build).
+
+`hasCompiler()` reports which build is loaded, and is the only way to tell
+before trying. The facade forwards to `Terrarium\Runtime::hasCompiler()`:
+
+```php
+if (!Terrarium\Terrarium::hasCompiler()) {
+    // artifacts only; a .wasm path would throw below
+}
+```
+
+In such a build both routes into the compiler raise a `Terrarium\Exception`:
+
+- **`precompile()`** — there is nothing to compile with.
+- **constructing from raw WebAssembly** — with or without `precompiled: true`,
+  since bytes that are not a Wasmtime artifact have no other path.
+
+Everything else is identical, including the artifact format: an artifact from a
+release's full build loads in that release's runtime-only build (same sources,
+same engine configuration), which is what lets one precompiled guest serve both
+Lambda layers.
 
 #### Synchronous-only guests
 

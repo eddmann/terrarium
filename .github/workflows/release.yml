@@ -75,6 +75,15 @@ jobs:
   # AWS Lambda / Bref — built INSIDE the Bref Amazon Linux 2023 image so the
   # binary loads on Lambda (glibc 2.34). Packaged as a Bref Lambda layer zip
   # (extension + a conf.d ini) and also shipped as the raw .so.
+  #
+  # Two extensions are built from the same sources: the full one, and the
+  # runtime-only one (`--no-default-features`: no Cranelift, no precompile(),
+  # no on-disk module cache), which loads precompiled artifacts and nothing
+  # else. Both are shipped, as `-lambda-bref-ARCH` and `-…-ARCH-runtime`. The
+  # precompiled guest is emitted by the full build and must load in both — an
+  # artifact is only loadable by an engine whose Config matches, and the two
+  # builds configure theirs identically. The smoke step below checks that in
+  # the image rather than trusting it.
   # ──────────────────────────────────────────────────────────────────────
   lambda-bref:
     name: lambda/bref ${{ matrix.arch }} · php ${{ matrix.php }}
@@ -122,8 +131,16 @@ jobs:
               cargo build --release          # rust-toolchain.toml pins the version
               mkdir -p dist
               cp /tmp/target/release/libterrarium.so dist/terrarium.so
+              # The runtime-only extension, from the same checkout. Its own
+              # CARGO_TARGET_DIR: the two builds differ only in features, so
+              # sharing one directory would make each rebuild the other from
+              # scratch (and briefly leave the wrong .so at the same path).
+              CARGO_TARGET_DIR=/tmp/target-runtime \
+                cargo build --release --no-default-features
+              cp /tmp/target-runtime/release/libterrarium.so dist/terrarium-runtime.so
               echo "built against: $(php-config --version), glibc reqs:"
               objdump -T dist/terrarium.so | grep -oE "GLIBC_[0-9.]+" | sort -V | uniq | tail -3
+              ls -l dist/terrarium.so dist/terrarium-runtime.so
             '
 
       # The TypeScript guest (the heavy one: 1-2 s of compilation per cold
@@ -148,6 +165,65 @@ jobs:
               $php tools/precompile-guests.php dist/precompiled tests/wasm/typescript_guest.wasm
             '
 
+      # What the -runtime layer rests on, checked rather than assumed: the
+      # runtime-only .so loads the artifact the FULL .so just emitted (both
+      # builds configure the engine identically, which is the whole condition
+      # for an artifact to load), and it is genuinely compiler-less — no raw
+      # wasm, no precompile(), hasCompiler() false. Run in the Bref image, on
+      # the exact binaries about to be packaged.
+      - name: Smoke-test the runtime-only build (${{ matrix.image }})
+        run: |
+          docker run --rm --security-opt seccomp=unconfined \
+            -v "$PWD":/src --entrypoint /bin/bash \
+            "${{ matrix.image }}" -lc '
+              set -euo pipefail
+              cd /src
+
+              /opt/bin/php -d extension=/src/dist/terrarium.so -r '\''
+                if (Terrarium\Runtime::hasCompiler() !== true) {
+                    fwrite(STDERR, "full build reports hasCompiler() false\n");
+                    exit(1);
+                }
+                echo "full: hasCompiler() true\n";
+              '\''
+
+              /opt/bin/php -d extension=/src/dist/terrarium-runtime.so -r '\''
+                if (Terrarium\Runtime::hasCompiler() !== false) {
+                    fwrite(STDERR, "runtime-only build reports hasCompiler() true\n");
+                    exit(1);
+                }
+
+                // The artifact the full .so emitted in the previous step.
+                $rt = new Terrarium\Runtime(
+                    file_get_contents("/src/dist/precompiled/typescript_guest.cwasm"),
+                    precompiled: true,
+                );
+                $out = $rt->eval("1 + 1");
+                if ($out !== 2) {
+                    fwrite(STDERR, "precompiled guest returned " . var_export($out, true) . "\n");
+                    exit(1);
+                }
+                echo "runtime-only: loaded typescript_guest.cwasm, eval ok\n";
+
+                // Raw wasm has no path through this build.
+                try {
+                    new Terrarium\Runtime(file_get_contents("/src/tests/wasm/quickjs_guest.wasm"));
+                    fwrite(STDERR, "runtime-only build accepted raw wasm\n");
+                    exit(1);
+                } catch (Terrarium\Exception $e) {
+                    echo "runtime-only: raw wasm refused -- {$e->getMessage()}\n";
+                }
+
+                try {
+                    Terrarium\Runtime::precompile(file_get_contents("/src/tests/wasm/quickjs_guest.wasm"));
+                    fwrite(STDERR, "runtime-only build accepted precompile()\n");
+                    exit(1);
+                } catch (Terrarium\Exception $e) {
+                    echo "runtime-only: precompile() refused -- {$e->getMessage()}\n";
+                }
+              '\''
+            '
+
       - name: Package Bref Lambda layer
         run: |
           ver="${{ inputs.version }}"; php="${{ matrix.php }}"; arch="${{ matrix.arch }}"
@@ -162,24 +238,46 @@ jobs:
           ( cd layer && zip -qr "../terrarium-v${ver}-php${php}-lambda-bref-${arch}.zip" . )
           cp dist/terrarium.so "terrarium-v${ver}-php${php}-lambda-bref-${arch}.so"
 
+          # The runtime-only layer, in the identical layout and under the
+          # identical bare name — swapping one layer for the other needs no
+          # change to the ini, the extension_dir, or the application.
+          mkdir -p layer-runtime/bref/extensions layer-runtime/bref/etc/php/conf.d
+          cp dist/terrarium-runtime.so layer-runtime/bref/extensions/terrarium.so
+          echo 'extension=terrarium.so' > layer-runtime/bref/etc/php/conf.d/ext-terrarium.ini
+          ( cd layer-runtime && zip -qr "../terrarium-v${ver}-php${php}-lambda-bref-${arch}-runtime.zip" . )
+          cp dist/terrarium-runtime.so "terrarium-v${ver}-php${php}-lambda-bref-${arch}-runtime.so"
+
           # The precompiled guest, in a zip naming the .so it belongs to so a
           # mismatched pair is obvious before Wasmtime refuses it.
           so_sha="$(sha256sum dist/terrarium.so | cut -d' ' -f1)"
+          runtime_sha="$(sha256sum dist/terrarium-runtime.so | cut -d' ' -f1)"
           printf '%s\n' \
-            "# Precompiled TypeScript guest for terrarium-v${ver}-php${php}-lambda-bref-${arch}.so" \
+            "# Precompiled TypeScript guest for terrarium-v${ver}-php${php}-lambda-bref-${arch}" \
             "" \
-            "Native machine code emitted by that exact extension build (sha256 ${so_sha})," \
-            "compiled for the ${arch} baseline CPU, without fuel metering. Load with" \
+            "Native machine code emitted by this release's ${arch} PHP ${php} extension" \
+            "build, compiled for the ${arch} baseline CPU, without fuel metering. It is" \
+            "bound to that build, and loads with BOTH .so files of this release:" \
+            "" \
+            "  terrarium-v${ver}-php${php}-lambda-bref-${arch}.so" \
+            "      sha256 ${so_sha}" \
+            "  terrarium-v${ver}-php${php}-lambda-bref-${arch}-runtime.so" \
+            "      sha256 ${runtime_sha}" \
+            "" \
+            "The -runtime build is the same sources without the compiler; it configures" \
+            "its engine identically, which is what makes one artifact serve both, and" \
+            "the release workflow checks that it loads this file before publishing." \
+            "" \
+            "Load with" \
             "new Terrarium\\Terrarium('/var/task/typescript_guest.cwasm', precompiled: true)" \
-            "on a Runtime constructed without fuel:. It loads only with that .so; any" \
-            "other build refuses it. Verify against SHA256SUMS. An artifact is trusted" \
-            "like the .so itself: never load one from an untrusted source. See" \
-            "docs/install.md." \
+            "on a Runtime constructed without fuel:. Any other build of the extension" \
+            "refuses it. Verify the guest artifacts against SHA256SUMS, and the two .so" \
+            "files against the sums above. An artifact is trusted like the .so itself:" \
+            "never load one from an untrusted source. See docs/install.md." \
             > dist/precompiled/README.md
           cp LICENSE THIRD_PARTY_LICENSES.md dist/precompiled/
           cp -R guests/typescript/third-party dist/precompiled/third-party
           ( cd dist/precompiled && zip -qr "$GITHUB_WORKSPACE/terrarium-v${ver}-php${php}-lambda-bref-${arch}-precompiled-guests.zip" . )
-          ls -lh terrarium-*.zip
+          ls -lh terrarium-*.zip terrarium-*.so
 
       - name: Assert the precompiled archive carries its licenses
         run: |

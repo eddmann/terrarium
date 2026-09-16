@@ -145,6 +145,10 @@ Why it's the natural fit:
 - **No JIT required if you don't want it** — the Pulley interpreter or Winch
   baseline compiler exist for environments that forbid W^X (e.g. some serverless
   configs). Good for an AWS Lambda / Bref deployment story.
+- **The compiler is separable** — `Module::deserialize` lives behind
+  Wasmtime's `runtime` feature, Cranelift behind its own, so an embedding that
+  ships precompiled artifacts can leave the compiler out of the binary
+  (the `compiler` cargo feature, below).
 
 Alternatives considered: **Wasmer** and **WAMR** (tiny, great for embedding, but
 C-native). Wasmtime's resource-limit primitives and Rust-first embedding made it
@@ -319,6 +323,18 @@ Cranelift's native output, so whoever can write to that directory can supply
 native code just as an artifact does. Treat the cache directory as part of the
 trust base, with the same permissions as the extension binary. A deployment
 that ships precompiled artifacts no longer needs it.
+
+A deployment like that can also drop the machinery entirely. The `compiler`
+cargo feature (in the default set) gates Cranelift, `precompile()`, the on-disk
+cache and the `.wat` text format; `cargo build --no-default-features` yields a
+**runtime-only** extension in which `Module::deserialize` is the only way a
+module comes into being. Raw wasm and `precompile()` are refused with a
+`Terrarium\Exception`, and `Terrarium\Runtime::hasCompiler()` reports which
+build is loaded. Nothing about the sandbox changes — `engine_config()` is
+shared by both builds, which is precisely why an artifact compiled by the full
+build loads into the runtime-only one — so this is a reduction of the *host's*
+attack surface and binary size, not of the guest's containment. See
+[install](install.md#runtime-only-build).
 
 ---
 

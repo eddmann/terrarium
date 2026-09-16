@@ -130,7 +130,8 @@ parse even though the compiler accepts it (`accessor` class members), and its
 
 Prebuilt binaries are attached to each
 [release](https://github.com/eddmann/terrarium/releases) for PHP 8.4 / 8.5 —
-self-hosted Linux, AWS Lambda (a ready Bref layer), and macOS (Apple Silicon) —
+self-hosted Linux, AWS Lambda (a ready Bref layer, full and runtime-only), and
+macOS (Apple Silicon) —
 plus the platform-independent PHP library and guest wasm. Enable the extension and
 point the facade at a guest:
 
@@ -148,6 +149,13 @@ composer require eddmann/terrarium
 
 The package requires `ext-terrarium`, so Composer errors clearly if the extension
 binary isn't enabled.
+
+On Lambda, ship the guest **precompiled** rather than as `.wasm` — a cold start
+cannot reuse a module cache, and each release attaches the TypeScript guest
+already precompiled for its Lambda builds. A deployment that does is better
+served by the **`-runtime` layer**: the same extension without Cranelift, which
+loads those artifacts and cannot compile wasm at all — see
+[which of the two Lambda builds](docs/install.md#which-of-the-two-lambda-builds).
 
 Or build from source (Rust 1.96+, clang, PHP dev headers — a plain cargo
 `cdylib`, no `phpize`; the guest fixtures are committed, so no wasm toolchain is
