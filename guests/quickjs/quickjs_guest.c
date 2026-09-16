@@ -457,7 +457,9 @@ __attribute__((export_name("check")))
 int64_t check(int32_t ptr, int32_t len) {
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) return ret_diags("failed to create JS runtime", NULL, 0, 0);
-    JS_SetMaxStackSize(rt, 256 * 1024);
+    /* No JS-level stack limit is set: there is none to set on this target (see
+     * eval() below). Deeply nested source exhausts the host's native stack and
+     * traps; it does not come back as a SyntaxError diagnostic. */
     JSContext *ctx = JS_NewContext(rt);
 
     Rd r = { (const uint8_t *)(uintptr_t)(uint32_t)ptr, 0, (size_t)(uint32_t)len };
@@ -515,8 +517,16 @@ int64_t eval(int32_t ptr, int32_t len) {
 
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) return ret_error(NULL, "failed to create JS runtime");
-    /* A clean JS-level stack limit before the wasm stack would overflow. */
-    JS_SetMaxStackSize(rt, 256 * 1024);
+    /* There is deliberately no JS-level stack limit here, because quickjs-ng
+     * has no stack guard on wasi: `update_stack_limit` forces
+     * `stack_limit = 0` under `#if defined(__wasi__)` and `JS_NewRuntime2`
+     * forces `rt->stack_size = 0`, so `js_check_stack_overflow` never fires and
+     * `JS_SetMaxStackSize` changes nothing. Runaway recursion is bounded by the
+     * HOST instead -- Wasmtime's native stack limit (`max_wasm_stack`,
+     * `maxStack` on the PHP side, capped at 2 MiB by the engine) -- and by the
+     * linear-memory shadow stack, whose size and (stack-first) placement are
+     * set in build.sh. Either way it is a trap the guest cannot catch, not a
+     * JS RangeError. */
     JSContext *ctx = JS_NewContext(rt);
 
     /* Decode the source string. */

@@ -90,26 +90,6 @@ check('maxStack does not reach the artifact (it is a run-time engine setting)', 
     // emitted code, so the same bytes come back whatever stack bound is named.
     eq(file_get_contents($plain), Terrarium::precompile($wasm, maxStack: 1 << 20));
 });
-check('portable and native artifacts both load and run here', function () use ($wasm) {
-    // `portable` (the default) compiles for the architecture's baseline CPU
-    // so the artifact loads on a plainer host; `portable: false` compiles
-    // for this machine's features. Both must load and behave the same on the
-    // machine that built them. Whether they differ in bytes depends on how
-    // far this CPU is above the baseline, so that is printed, not asserted;
-    // the baseline-vs-native refusal itself is pinned in the Rust unit tests.
-    $bytes = file_get_contents($wasm);
-    $portable = \Terrarium\Runtime::precompile($bytes);
-    $native = \Terrarium\Runtime::precompile($bytes, portable: false);
-    printf("  portable %d bytes, native %d bytes (%s)\n", strlen($portable), strlen($native), $portable === $native ? 'identical: a baseline CPU' : 'differ');
-    $p = new \Terrarium\Runtime($portable, precompiled: true);
-    $n = new \Terrarium\Runtime($native, precompiled: true);
-    $p->register('tag', fn (string $s): string => "p:$s");
-    $n->register('tag', fn (string $s): string => "n:$s");
-    eq(['p:x', 'n:x'], [$p->eval('tag("x")'), $n->eval('tag("x")')]);
-    eq(42, $p->eval('6 * 7'));
-    eq(42, $n->eval('6 * 7'));
-});
-
 check('precompile() refuses an artifact as input', function () use ($tmp, $plain) {
     try {
         Terrarium::precompile($plain);
@@ -119,8 +99,8 @@ check('precompile() refuses an artifact as input', function () use ($tmp, $plain
     }
 });
 
-// Must run before anything else loads this artifact: the measurement is the
-// first (deserializing) construction in this process against a later one.
+// Run before the portability check below: it loads identical artifact bytes
+// and would warm the cache before this first (deserializing) construction.
 echo "\nartifacts go through the process-wide compiled-guest cache\n";
 $cold = -hrtime(true);
 $first = new Terrarium($plain, precompiled: true);
@@ -169,6 +149,26 @@ check('an artifact and its wasm are separate cache entries, both usable', functi
     $w = new Terrarium($wasm);
     eq(2, $a->eval('1 + 1'));
     eq(2, $w->eval('1 + 1'));
+});
+
+check('portable and native artifacts both load and run here', function () use ($wasm) {
+    // `portable` (the default) compiles for the architecture's baseline CPU
+    // so the artifact loads on a plainer host; `portable: false` compiles
+    // for this machine's features. Both must load and behave the same on the
+    // machine that built them. Whether they differ in bytes depends on how
+    // far this CPU is above the baseline, so that is printed, not asserted;
+    // the baseline-vs-native refusal itself is pinned in the Rust unit tests.
+    $bytes = file_get_contents($wasm);
+    $portable = \Terrarium\Runtime::precompile($bytes);
+    $native = \Terrarium\Runtime::precompile($bytes, portable: false);
+    printf("  portable %d bytes, native %d bytes (%s)\n", strlen($portable), strlen($native), $portable === $native ? 'identical: a baseline CPU' : 'differ');
+    $p = new \Terrarium\Runtime($portable, precompiled: true);
+    $n = new \Terrarium\Runtime($native, precompiled: true);
+    $p->register('tag', fn (string $s): string => "p:$s");
+    $n->register('tag', fn (string $s): string => "n:$s");
+    eq(['p:x', 'n:x'], [$p->eval('tag("x")'), $n->eval('tag("x")')]);
+    eq(42, $p->eval('6 * 7'));
+    eq(42, $n->eval('6 * 7'));
 });
 
 echo "\nan artifact behaves exactly like the wasm it came from\n";

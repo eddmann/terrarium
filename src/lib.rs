@@ -31,6 +31,16 @@
 //! is a host-trusted input, never guest input, and is never inferred: the flag
 //! is the host saying so.
 //!
+//! Build variants: the `compiler` Cargo feature (on by default) is Cranelift and
+//! the rest of the compile-time half of Wasmtime. Built without it the extension
+//! is *runtime-only* — a deployment that ships artifacts and only ever loads them
+//! (`Runtime::hasCompiler()` is then `false`). The PHP surface is the same class
+//! with the same methods either way; what a runtime-only build lacks it refuses
+//! at the two entry points that would need a compiler, `precompile()` and
+//! constructing from WebAssembly. Nothing else differs — in particular
+//! `engine_config` is the same `Config` in both, so a runtime-only build loads
+//! the artifacts a full build of the same source tree produced.
+//!
 //! What is shared between `Runtime` objects: *only immutable compiled code*.
 //! Identical wasm bytes compiled under identical engine options resolve to one
 //! process-wide `Engine` + `Module` + `InstancePre` (see `compiled_guest`), so
@@ -158,6 +168,8 @@ impl Terrarium {
     /// — which is loaded without compiling. It must be built with the same
     /// `fuel`-enabled setting; see `deserialize` for why the flag is required
     /// rather than detected, and `precompile` for what an artifact is bound to.
+    /// A runtime-only build (`hasCompiler()` false) accepts nothing else: raw
+    /// WebAssembly is refused, because there is no compiler to give it to.
     #[php(defaults(memoryLimit = None, timeoutMs = None, maxStack = None, fuel = None, isolated = false, precompiled = false))]
     pub fn __construct(
         source: &Zval,
@@ -178,7 +190,7 @@ impl Terrarium {
 
         let memory_limit = memoryLimit.unwrap_or(0).max(0) as usize;
         let timeout_ms = timeoutMs.unwrap_or(0).max(0) as u64;
-        let max_stack = maxStack.unwrap_or(0).max(0) as usize;
+        let max_stack = max_stack_arg(maxStack)?;
         let fuel = fuel.unwrap_or(0).max(0) as u64;
 
         // Which of the two loaders may see these bytes is settled here, before
@@ -284,41 +296,64 @@ impl Terrarium {
         fuel: Option<i64>,
         portable: bool,
     ) -> PhpResult<Binary<u8>> {
-        let source = source.zend_str().map(|s| s.as_bytes()).ok_or_else(|| {
-            PhpException::from_class::<TerrariumException>("source must be a string".to_owned())
-        })?;
-        if Engine::detect_precompiled(source).is_some() {
+        #[cfg(not(feature = "compiler"))]
+        {
+            // The PHP surface is the same in both builds, so the method exists
+            // and refuses rather than being absent (`method_exists` probes, and
+            // callers, see one shape of the class).
+            let _ = (source, maxStack, fuel, portable);
             return Err(PhpException::from_class::<TerrariumException>(
-                "source is already a precompiled artifact: precompile() takes WebAssembly"
-                    .to_owned(),
+                PRECOMPILE_NEEDS_COMPILER.to_owned(),
             ));
         }
-
-        let max_stack = maxStack.unwrap_or(0).max(0) as usize;
-        let fuel = fuel.unwrap_or(0).max(0) as u64;
-
-        // The same `Config` the constructor would build for these options, so
-        // the artifact is loadable by exactly the engine that will load it. An
-        // explicit target (the host's own triple) is what turns off host CPU
-        // feature detection: Wasmtime then uses the triple's baseline ISA
-        // flags, and the loader accepts an artifact whose flags are a subset of
-        // the loading host's.
-        let mut config = engine_config(fuel > 0, max_stack);
-        if portable {
-            let triple = target_lexicon::Triple::host().to_string();
-            config.target(&triple).map_err(|e| {
-                PhpException::from_class::<TerrariumException>(format!(
-                    "precompile: cannot target {triple}: {e:#}"
-                ))
+        #[cfg(feature = "compiler")]
+        {
+            let source = source.zend_str().map(|s| s.as_bytes()).ok_or_else(|| {
+                PhpException::from_class::<TerrariumException>("source must be a string".to_owned())
             })?;
+            if Engine::detect_precompiled(source).is_some() {
+                return Err(PhpException::from_class::<TerrariumException>(
+                    "source is already a precompiled artifact: precompile() takes WebAssembly"
+                        .to_owned(),
+                ));
+            }
+
+            let max_stack = max_stack_arg(maxStack)?;
+            let fuel = fuel.unwrap_or(0).max(0) as u64;
+
+            // The same `Config` the constructor would build for these options, so
+            // the artifact is loadable by exactly the engine that will load it. An
+            // explicit target (the host's own triple) is what turns off host CPU
+            // feature detection: Wasmtime then uses the triple's baseline ISA
+            // flags, and the loader accepts an artifact whose flags are a subset of
+            // the loading host's.
+            let mut config = engine_config(fuel > 0, max_stack);
+            if portable {
+                let triple = target_lexicon::Triple::host().to_string();
+                config.target(&triple).map_err(|e| {
+                    PhpException::from_class::<TerrariumException>(format!(
+                        "precompile: cannot target {triple}: {e:#}"
+                    ))
+                })?;
+            }
+            let engine = Engine::new(&config).map_err(|e| {
+                PhpException::from_class::<TerrariumException>(format!("engine: {e:#}"))
+            })?;
+            let artifact = engine.precompile_module(source).map_err(|e| {
+                PhpException::from_class::<TerrariumException>(format!("precompile: {e:#}"))
+            })?;
+            Ok(Binary::new(artifact))
         }
-        let engine = Engine::new(&config).map_err(|e| {
-            PhpException::from_class::<TerrariumException>(format!("engine: {e:#}"))
-        })?;
-        let artifact = engine.precompile_module(source).map_err(|e| {
-            PhpException::from_class::<TerrariumException>(format!("precompile: {e:#}"))
-        })?;
-        Ok(Binary::new(artifact))
+    }
+
+    /// Whether this extension build can compile WebAssembly (the `compiler`
+    /// Cargo feature). `false` is a runtime-only build: it loads precompiled
+    /// artifacts (`precompiled: true`) and refuses both raw WebAssembly and
+    /// `precompile()`. Everything else about the class is identical, so this is
+    /// the one thing worth branching on — a deployment asserts it, and a test
+    /// suite that needs a compiler skips on it.
+    pub fn has_compiler() -> bool {
+        cfg!(feature = "compiler")
     }
 
     /// Expose a PHP callable to the guest under a flat, dotted capability name.
@@ -880,7 +915,12 @@ fn engine_config(fuel: bool, max_stack: usize) -> Config {
     // the PHP guest for zend_bailout) compiles to wasm try/throw.
     config.wasm_exceptions(true);
     // Cache compiled modules on disk so a heavy guest (e.g. a JS engine in
-    // wasm) is compiled once and reused across instances and processes.
+    // wasm) is compiled once and reused across instances and processes. Only
+    // in a build that can compile: the cache stores nothing else, and it is
+    // engine-external — it is not part of what makes an artifact loadable, so
+    // a runtime-only build still loads what a full build produced (pinned by
+    // `make test-runtime`).
+    #[cfg(feature = "compiler")]
     if let Ok(cache) = wasmtime::Cache::from_file(None) {
         config.cache(Some(cache));
     }
@@ -896,6 +936,31 @@ fn engine_config(fuel: bool, max_stack: usize) -> Config {
     config
 }
 
+/// The most native stack a guest call may use, in bytes: the ceiling on
+/// `maxStack`, and the figure the guests' own linear-memory stacks are sized
+/// against (`guests/*/build.sh`). Wasmtime enforces the same 2 MiB itself today
+/// (`max_wasm_stack` may not exceed its `async_stack_size`), but only in a
+/// build where its `async` feature happens to be on -- it is here, transitively
+/// through `wasmtime-wasi` -- so the guests' headroom would otherwise rest on a
+/// dependency's feature graph. Pinning it here makes it this extension's own
+/// contract, in its own words, whatever Wasmtime is built with.
+const MAX_STACK_CEILING: usize = 2 << 20;
+
+/// `maxStack` as passed from PHP: omitted or non-positive means Wasmtime's
+/// default, anything above `MAX_STACK_CEILING` is refused rather than clamped,
+/// so a host that asked for more finds out.
+fn max_stack_arg(max_stack: Option<i64>) -> PhpResult<usize> {
+    let max_stack = max_stack.unwrap_or(0).max(0) as usize;
+    if max_stack > MAX_STACK_CEILING {
+        return Err(PhpException::from_class::<TerrariumException>(format!(
+            "maxStack cannot exceed {MAX_STACK_CEILING} bytes (2 MiB): that is the native \
+             stack budget of a guest call, and the bundled guests size their own stacks \
+             against it"
+        )));
+    }
+    Ok(max_stack)
+}
+
 fn engine_for(fuel: bool, max_stack: usize) -> PhpResult<Engine> {
     Engine::new(&engine_config(fuel, max_stack))
         .map_err(|e| PhpException::from_class::<TerrariumException>(format!("engine: {e:#}")))
@@ -903,6 +968,7 @@ fn engine_for(fuel: bool, max_stack: usize) -> PhpResult<Engine> {
 
 /// Compile wasm bytes into a shareable `Engine`/`Module`/`InstancePre` under the
 /// engine-level options that `GuestKey` names.
+#[cfg(feature = "compiler")]
 fn compile(source: &[u8], fuel: bool, max_stack: usize) -> PhpResult<Compiled> {
     let engine = engine_for(fuel, max_stack)?;
     let module = Module::new(&engine, source)
@@ -910,8 +976,33 @@ fn compile(source: &[u8], fuel: bool, max_stack: usize) -> PhpResult<Compiled> {
     link(engine, module)
 }
 
+/// The refusal a runtime-only build gives where a compiler would be needed. It
+/// names the build rather than the input: the caller passed nothing wrong, this
+/// binary simply cannot compile.
+#[cfg(not(feature = "compiler"))]
+const RUNTIME_ONLY: &str = "this extension build is runtime-only (built without the `compiler` \
+     feature): construct with a precompiled artifact and `precompiled: true`";
+
+/// The same, for `precompile()` — where the fix is a different build, not a
+/// different argument.
+#[cfg(not(feature = "compiler"))]
+const PRECOMPILE_NEEDS_COMPILER: &str =
+    "precompile: this extension build is runtime-only (built without the `compiler` feature) \
+     and cannot compile WebAssembly: produce artifacts with a full build of this same \
+     version, in the release pipeline, and load them with `precompiled: true`";
+
+/// Runtime-only build: the same signature, refusing rather than compiling, so
+/// the constructor keeps one loader-selecting expression across both builds.
+#[cfg(not(feature = "compiler"))]
+fn compile(_source: &[u8], _fuel: bool, _max_stack: usize) -> PhpResult<Compiled> {
+    Err(PhpException::from_class::<TerrariumException>(
+        RUNTIME_ONLY.to_owned(),
+    ))
+}
+
 /// Load a precompiled artifact (`Runtime::precompile`) instead of compiling —
-/// the same `Compiled`, without Cranelift.
+/// the same `Compiled`, without Cranelift. Needing no compiler is what makes it
+/// the one way into a runtime-only build.
 ///
 /// `Module::deserialize` is `unsafe` for a reason that no check here removes:
 /// the bytes *are* machine code, and Wasmtime only lightly validates their
@@ -1202,6 +1293,8 @@ mod tests {
         );
     }
 
+    // `precompile_module` and the `.wat` fixture below both need a compiler.
+    #[cfg(feature = "compiler")]
     #[test]
     fn a_portable_artifact_targets_the_baseline_and_loads_natively() {
         // What `precompile(portable: true)` produces must load through the

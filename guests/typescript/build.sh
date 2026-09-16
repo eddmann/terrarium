@@ -232,10 +232,68 @@ echo "Compiling payloads to QuickJS bytecode ..."
 "$QJSC" -s -s -C -N qjsc_driver     -o "$BUILD/driver_bc.c"     "$HERE/driver.js"
 
 # --- 5. the base guest wasm ---------------------------------------------------
-# The checker recurses deeply: 12 MiB of linker stack covers the compiler
-# runtime's 4 MiB JS stack budget with headroom (vs 1 MiB for the plain guest).
+# The checker recurses deeply, so the guest needs more linker stack than the
+# plain QuickJS guest's 1 MiB. 4 MiB is sized against what actually bounds
+# recursion here, which is NOT QuickJS's own limit: quickjs-ng compiles out
+# `js_check_stack_overflow` on wasi (`update_stack_limit` forces
+# `stack_limit = 0` under `#if defined(__wasi__)`, and `JS_NewRuntime2` forces
+# `rt->stack_size = 0`), so `JS_SetMaxStackSize` limits nothing on this target
+# and ts_guest.c does not call it. What stops a runaway recursion is Wasmtime's
+# NATIVE stack limit (`max_wasm_stack`, `maxStack` on the PHP side), which the
+# engine hard-caps at `async_stack_size` = 2 MiB -- a host cannot configure
+# more, and past it the guest takes a clean `call stack exhausted` trap.
+#
+# Measured against that ceiling (maxStack = 2 MiB, the deepest reachable
+# checker, parser, schema and JS-recursion workloads), the linear-memory
+# shadow stack tops out at ~1.2 MiB: a 1 MiB stack diverges from a 12 MiB one,
+# a 2 MiB stack does not. 4 MiB is that worst case with ~3.3x headroom.
+#
+# `--stack-first` decides what happens if that headroom is ever wrong. The
+# shadow stack grows DOWNWARDS, and in the default layout (static data, then
+# the stack, then the heap) it grows straight into the static data: an overflow
+# silently corrupts whatever constant or global sits below it, and the program
+# fails later, somewhere else. Measured on a deliberately undersized 1 MiB
+# build: the same deep-nesting check that traps out of bounds at one depth
+# reports `InternalError: invalid opcode: pc=17 opcode=0x00` at the next -- the
+# guest ran to completion and handed back a diagnostic about bytecode the
+# overflow had scribbled on. With the stack placed first it runs off the BOTTOM
+# of linear memory instead, so the overflowing access is itself out of bounds
+# and traps deterministically, at the depth that overflowed and nowhere else.
+# Same bytes reserved, sound failure mode.
+#
+# Sizing still is not free, but stack-first changed what it costs. A `.cwasm`
+# carries linear memory from the first INITIALISED page to the last (which,
+# for a Wizer snapshot whose heap reaches the top, is the end of the declared
+# initial memory). With the stack between the data and the heap, page 0
+# is initialised, so the reserved stack fell inside that image and every byte of
+# it -- zero or not -- was a byte in the artifact (which is what made 12 MiB ->
+# 4 MiB worth 45,062,768 -> 36,674,160 bytes). Placed first, the stack is BELOW
+# the first initialised page and mostly drops out of the image: the same 4 MiB
+# build precompiles to 32,557,568 bytes, and a 12 MiB stack-first build to
+# 32,557,560 -- a rounding error apart. What a bigger stack still costs is the
+# declared initial memory itself (496 pages here, 624 at 12 MiB), which every
+# instance reserves and `memoryLimit` is measured against. So size it against
+# the measurement above, not by reflex, and re-measure if it ever moves.
+#
 # `wizer.initialize` is the pre-init entrypoint consumed in step 6 (it calls the
 # guest's ensure_compiler); Wizer strips the export from the snapshot.
+#
+# `-O2` is the measured setting, not an unexamined default. Medians over 25
+# iterations, variants interleaved in one process so machine drift hits them
+# equally: `-O3` is SLOWER on every path this guest is used for -- shared check
+# 52.9 -> 55.8 ms, shared analyze 68.8 -> 72.1 ms, shared eval 63.8 -> 65.5 ms,
+# a fixed CPU-bound eval 69.0 -> 73.7 ms, isolated check 182.8 -> 190.1 ms --
+# and its larger frames cost recursion headroom, which is what actually bounds
+# this guest: at maxStack = 2 MiB the deepest completing `f(n)` falls 3538 ->
+# 3117, nested parens 318 -> 280, the generic chain 233 -> 205, schema nesting
+# 204 -> 180. Adding `-flto` (at either level) lands within run-to-run noise and
+# is not free either: the LTO link extracts libc's `__stack_chk_fail.o` as a
+# possible libcall, and that object's constructor seeds the stack guard from
+# `random_get` -- so the guest acquires a sixth WASI import, which the
+# deterministic five-import linker in wizen/ does not answer and Wizer then
+# fails on. Both variants rebuild byte-identically, and this guest's suites
+# pass at -O3 -- so they were rejected on the numbers above, not on principle.
+# (The plain QuickJS guest's suites do NOT pass at -O3: see its build.sh.)
 echo "Compiling typescript_guest.base.wasm ..."
 "$CLANG" \
     --target=wasm32-wasip1 -mexec-model=reactor \
@@ -246,7 +304,7 @@ echo "Compiling typescript_guest.base.wasm ..."
     "$QJS/quickjs.c" "$QJS/libregexp.c" "$QJS/libunicode.c" "$QJS/dtoa.c" \
     -lm \
     -Wl,--export=eval -Wl,--export=guest_alloc -Wl,--export=check -Wl,--export=analyze \
-    -Wl,-z,stack-size=12582912 \
+    -Wl,-z,stack-size=4194304 -Wl,--stack-first \
     -o "$BUILD/typescript_guest.base.wasm"
 
 # --- 6. pre-initialize with Wizer --------------------------------------------

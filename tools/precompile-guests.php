@@ -40,6 +40,13 @@ if (!class_exists(Terrarium\Runtime::class)) {
     fwrite(STDERR, "the terrarium extension is not loaded (php -d extension=...)\n");
     exit(1);
 }
+// Precompiling is the one thing a runtime-only build cannot do. Say so here
+// rather than letting the first guest fail with the same message a deployment
+// would see, several seconds in.
+if (!Terrarium\Runtime::hasCompiler()) {
+    fwrite(STDERR, "this extension is a runtime-only build (no `compiler` feature): it loads artifacts but cannot produce them. Use the matching full build.\n");
+    exit(1);
+}
 
 $out = array_shift($args);
 if (!is_dir($out) && !mkdir($out, 0o755, true)) {

@@ -4,8 +4,8 @@ Implementation notes and internals for the Terrarium extension. For the
 user-facing overview and quick start, see the [project README](../README.md).
 
 - **[Installation](install.md)** — the three pieces (extension binary, PHP
-  library, guest wasm), the release matrix, AWS Lambda (Bref), and building from
-  source.
+  library, guest wasm), the release matrix, AWS Lambda (Bref), the runtime-only
+  build, and building from source.
 - **[API reference](api.md)** — the `Terrarium` class and every method.
 - **[Architecture](architecture.md)** — why WebAssembly gives in-process
   isolation native embedding can't, the capability bridge and `host_call` ABI,

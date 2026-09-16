@@ -446,9 +446,18 @@ static int ensure_compiler(void) {
     if (g_cctx) return 0;
     g_crt = JS_NewRuntime();
     if (!g_crt) return 1;
-    /* The checker recurses deeply; give it a generous JS-level stack budget
-     * (the wasm linker stack is sized to cover it — see build.sh). */
-    JS_SetMaxStackSize(g_crt, 4 * 1024 * 1024);
+    /* No JS-level stack budget is set here, and none can be: quickjs-ng has no
+     * stack guard on wasi. `update_stack_limit` forces `stack_limit = 0` under
+     * `#if defined(__wasi__)` and `JS_NewRuntime2` forces `rt->stack_size = 0`,
+     * so `js_check_stack_overflow` always says "fine" and `JS_SetMaxStackSize`
+     * changes nothing. Deep recursion — the checker's, the parser's, or user
+     * code's — is bounded by the HOST instead: Wasmtime's native stack limit
+     * (`max_wasm_stack`, `maxStack` on the PHP side, capped at 2 MiB by the
+     * engine), which trips a `call stack exhausted` trap. The guest does not
+     * get to catch that; the Store is discarded and the next call starts from a
+     * fresh instance. The linear-memory shadow stack is sized against that same
+     * 2 MiB ceiling, and placed first so that overflowing IT also traps rather
+     * than corrupting static data — both in build.sh step 5. */
     g_cctx = JS_NewContext(g_crt);
     if (!g_cctx) return 1;
 
@@ -623,7 +632,10 @@ int64_t eval(int32_t ptr, int32_t len) {
      * fresh user runtime (also used to run the stripped JS afterwards). */
     JSRuntime *rt = JS_NewRuntime();
     if (!rt) return ret_error("failed to create JS runtime");
-    JS_SetMaxStackSize(rt, 256 * 1024);
+    /* Nothing caps this runtime's recursion below the compiler runtime's: on
+     * wasi QuickJS has no stack guard to set (see ensure_compiler). User-code
+     * recursion depth is whatever `maxStack` allows, and overrunning it is a
+     * host trap, not a JS RangeError. */
     JSContext *ctx = JS_NewContext(rt);
 
     Rd r = { (const uint8_t *)(uintptr_t)(uint32_t)ptr, 0, (size_t)(uint32_t)len };

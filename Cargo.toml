@@ -1,6 +1,6 @@
 [package]
 name = "terrarium"
-version = "1.3.0"
+version = "1.4.0"
 edition = "2021"
 description = "Expose a typed PHP SDK to a sandboxed guest language (JS/TS/Python/PHP) running inside a WebAssembly isolation boundary"
 license = "MIT"
@@ -11,17 +11,78 @@ repository = "https://github.com/eddmann/terrarium"
 name = "terrarium"
 crate-type = ["cdylib"]
 
+# The full build (the default) compiles WebAssembly in process; a build without
+# `compiler` is runtime-only — it loads precompiled artifacts and nothing else.
+# See the `compiler` feature and `make build-runtime`.
+[features]
+default = ["compiler"]
+# Cranelift and everything that only earns its size when wasm is compiled here:
+#   cranelift             — the compiler itself, behind `Module::new` and
+#                           `Engine::precompile_module`
+#   parallel-compilation  — rayon, which Cranelift uses to compile functions in
+#                           parallel (on in the default feature set today)
+#   cache                 — the on-disk compiled-module cache, which only ever
+#                           caches the output of a compile
+#   wat                   — the WebAssembly text format, which `Module::new`
+#                           accepts alongside binary wasm (the adversarial
+#                           fixtures in `tests/wasm/adversarial` are `.wat`)
+# `target-lexicon` names the host triple for `precompile(portable: true)`, which
+# is a compiler-only entry point.
+compiler = [
+    "dep:target-lexicon",
+    "wasmtime/cranelift",
+    "wasmtime/parallel-compilation",
+    "wasmtime/cache",
+    "wasmtime/wat",
+]
+
 [dependencies]
 ext-php-rs = { version = "0.15", features = ["closure"] }
-# The high-level Wasmtime embedding API (cranelift + native trap handling).
-wasmtime = "46"
+# The high-level Wasmtime embedding API. Default features are off and only what
+# this extension actually reaches for is enabled, because a PHP extension is
+# linked into every process that loads it:
+#   runtime     — the embedding API itself (Engine/Store/Linker/Instance,
+#                 `Module::deserialize`, epoch interruption, fuel, StoreLimits)
+#   std         — hosted platform (files, threads, the system allocator)
+#   backtrace   — wasm frames in a trap's message, which the exception surface
+#                 reports to PHP
+#   gc          — required by `wasm_exceptions(true)`: Wasmtime refuses the
+#                 exceptions proposal outright when GC support is compiled out,
+#                 and an exception object is allocated in the GC heap
+#   gc-copying  — one collector must be present for `gc`; the copying collector
+#                 is the one `Collector::Auto` picks in Wasmtime's own default
+#                 feature set, so this keeps the engine behaving as before
+#   threads     — the threads proposal (shared memories, atomic instructions),
+#                 which was accepted before this trim and which a guest built
+#                 with `-pthread` or for `wasm32-wasip1-threads` needs merely to
+#                 *load*. No extra crate, ~30 KiB; and it is part of the wasm
+#                 feature set an artifact is bound to, so flipping it later
+#                 would refuse every artifact already emitted
+# What the default set brings that nothing here uses — and is therefore off:
+# `wat`/`cache`/`cranelift`/`parallel-compilation` (compiler-only, above),
+# `component-model-async`, `stack-switching`, `pooling-allocator`,
+# `profiling`, `demangle`, `addr2line`, `coredump`, `debug`, `debug-builtins`,
+# `compile-time-builtins`, `wit-parser`, `anyhow`, and the `gc-drc`/`gc-null`
+# collectors. `component-model` and `async` are *not* listed here but are still
+# enabled in every build: `wasmtime-wasi`'s preview1 support is built on its
+# preview2 one (`p1 = ["dep:wiggle", "p2"]`), and `p2` turns both on.
+wasmtime = { version = "46", default-features = false, features = [
+    "runtime",
+    "std",
+    "backtrace",
+    "gc",
+    "gc-copying",
+    "threads",
+] }
 # WASI preview1 host support, so guests built against a libc (e.g. QuickJS via
 # the WASI SDK) get working clock/random/etc. Capability-only guests (Boa, the
-# example SDK guest) simply don't import any of it.
-wasmtime-wasi = "46"
+# example SDK guest) simply don't import any of it. Only `p1`: the preview2
+# component world this extension never links is left out (it comes back in
+# through `p1`'s own dependency on it, but its bindings are not generated).
+wasmtime-wasi = { version = "46", default-features = false, features = ["p1"] }
 # The host triple, to precompile for an architecture's baseline CPU features
 # rather than the build machine's (a Wasmtime dependency already).
-target-lexicon = "0.13"
+target-lexicon = { version = "0.13", optional = true }
 # Value marshaling: a neutral MiddleValue (de)serialized to native msgpack, the
 # byte form carried across the host_call boundary.
 serde = { version = "1", features = ["derive"] }
@@ -31,4 +92,15 @@ rmp-serde = "1"
 [profile.release]
 opt-level = 3
 lto = "thin"
+# Deliberate: ext-php-rs's `try_catch` (around constructors, for Zend bailouts)
+# and its destructor handling rely on unwinding. A panic inside a PHP-callable
+# does NOT become a PHP exception -- the `extern "C"` wrappers cannot unwind, so
+# the process aborts, printing the message and `#[track_caller]` location to
+# stderr first.
 panic = "unwind"
+# ~5.3 MiB of the shipped cdylib is a symbol table nothing at run time reads:
+# `get_module` stays in the dynamic table, `.eh_frame` and `.rodata` stay, so
+# loading, unwinding and panic messages are unaffected. What goes is `perf`/
+# `gdb` symbolisation of extension frames; keep a local unstripped build for
+# that.
+strip = "symbols"

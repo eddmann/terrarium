@@ -22,7 +22,9 @@ make typescript-guest      # WASI_SDK=/path/to/wasi-sdk   (and cargo, for Wizer)
 4. generate the JS payloads (the lib map, the shimmed ts-blank-space) and compile
    each to bytecode with the native `qjsc`
 5. compile `ts_guest.c` + the bytecode arrays + quickjs into a base wasm
-   (12 MiB linker stack — the checker recurses deeply)
+   (4 MiB linker stack, placed first — the checker recurses deeply; see
+   `build.sh` step 5 for how that size is derived and why the stack sits at the
+   bottom of linear memory)
 6. **pre-initialize with [Wizer](https://github.com/bytecodealliance/wizer)** (see
    below), producing `tests/wasm/typescript_guest.wasm`
 
@@ -319,6 +321,17 @@ parse, check and type-erase source.
     locale-blind — keep the `Intl.*Options` types their signatures reference.
     Deleting the namespace outright would have broken those; keeping the values
     would have kept lying. `tests/php/11_es_surface.php` holds both halves.
+- **Nothing inside the guest limits recursion depth.** quickjs-ng compiles its
+  stack guard out on wasi (`update_stack_limit` pins `stack_limit` to 0 there,
+  `JS_NewRuntime2` pins `rt->stack_size` to 0), so `JS_SetMaxStackSize` has no
+  effect and `ts_guest.c` does not call it — deep recursion never surfaces as a
+  JS `RangeError`. Two host-side bounds apply instead, and both are traps the
+  guest cannot catch: Wasmtime's native stack limit (`maxStack`, capped at
+  2 MiB by the engine) gives `call stack exhausted`, and the linear-memory
+  shadow stack — sized in `build.sh` step 5 against that same ceiling, and
+  placed first so overrunning it runs off the bottom of memory — gives an
+  out-of-bounds trap. Either way the Store is discarded and the next call gets a
+  fresh instance.
 - The checker is pinned to **`target: ES2024` / `lib: ["lib.es2024.d.ts"]`**
   (`driver.js`), which is still deliberately narrower than the engine.
   QuickJS-ng runs ahead of it — `Array.fromAsync`, `using` declarations and
